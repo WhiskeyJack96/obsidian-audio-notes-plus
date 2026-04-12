@@ -103,6 +103,11 @@ export class AudioRecorder {
 	 */
 	async stop(): Promise<Blob> {
 		return new Promise((resolve) => {
+			// Stop PCM delivery immediately so no chunks arrive after the main thread flushes.
+			this.workletNode?.port && (this.workletNode.port.onmessage = null);
+			this.workletNode?.disconnect();
+			this.source?.disconnect();
+
 			if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
 				this.mediaRecorder.onstop = () => {
 					const blob = new Blob(this.recordedChunks, { type: "audio/webm" });

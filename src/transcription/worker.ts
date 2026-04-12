@@ -22,6 +22,7 @@ import {
 let transcriber: AutomaticSpeechRecognitionPipeline;
 let sileroVad: Awaited<ReturnType<typeof AutoModel.from_pretrained>>;
 let inferenceChain = Promise.resolve();
+let messageQueue = Promise.resolve();
 let isRecording = false;
 let bufferPointer = 0;
 let postSpeechSamples = 0;
@@ -104,6 +105,10 @@ async function vad(buffer: Float32Array): Promise<boolean> {
 }
 
 async function transcribe(buffer: Float32Array, data: Record<string, number>): Promise<void> {
+	if (!buffer || buffer.length === 0) {
+		return;
+	}
+
 	const result = await (inferenceChain = inferenceChain.then(() =>
 		transcriber(buffer)
 	));
@@ -208,10 +213,7 @@ async function processAudioChunk(buffer: Float32Array): Promise<void> {
 	dispatchForTranscriptionAndReset();
 }
 
-// Message handler
-self.onmessage = async (event: MessageEvent) => {
-	const data = event.data;
-
+async function handleMessage(data: { type?: string; modelId?: string; buffer?: Float32Array }): Promise<void> {
 	if (data.type === "init") {
 		await loadModels(data.modelId);
 		return;
@@ -227,4 +229,18 @@ self.onmessage = async (event: MessageEvent) => {
 	if (data.buffer) {
 		await processAudioChunk(data.buffer);
 	}
+}
+
+function postWorkerError(error: unknown): void {
+	const message = error instanceof Error ? error.message : String(error);
+	self.postMessage({ type: "error", error: message });
+}
+
+// Message handler
+self.onmessage = (event: MessageEvent) => {
+	messageQueue = messageQueue
+		.then(() => handleMessage(event.data as { type?: string; modelId?: string; buffer?: Float32Array }))
+		.catch((error) => {
+			postWorkerError(error);
+		});
 };

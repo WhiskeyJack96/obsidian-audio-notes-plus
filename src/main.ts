@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Plugin, TFile, normalizePath } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from "obsidian";
 import { VoiceNotesSettingTab } from "./settings";
 import { TranscriptionManager } from "./transcription/manager";
 import { AudioRecorder } from "./recorder";
@@ -23,6 +23,7 @@ export default class VoiceNotesPlugin extends Plugin {
 	private statusBarEl: HTMLElement | null = null;
 	private isRecording = false;
 	private ribbonIconEl: HTMLElement | null = null;
+	private recordingNotice: Notice | null = null;
 	private pendingTranscriptChunks: string[] = [];
 	private recordingTarget: RecordingTarget | null = null;
 
@@ -36,6 +37,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			"Toggle voice recording",
 			() => { this.toggleRecording(); }
 		);
+		this.updateRecordingUi();
 
 		// Commands
 		this.addCommand({
@@ -83,6 +85,7 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.hideRecordingNotice();
 		this.transcriptionManager?.destroy();
 		this.transcriptionManager = null;
 	}
@@ -131,7 +134,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.isRecording = true;
 		this.recordingTarget = target;
 		this.pendingTranscriptChunks = [];
-		this.ribbonIconEl?.addClass("voice-notes-plus-active");
+		this.updateRecordingUi();
 		this.updateStatusBar("recording_start", "Recording...");
 
 		this.recorder = new AudioRecorder();
@@ -156,7 +159,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			this.isRecording = false;
 			this.recordingTarget = null;
 			this.pendingTranscriptChunks = [];
-			this.ribbonIconEl?.removeClass("voice-notes-plus-active");
+			this.updateRecordingUi();
 			this.updateStatusBar(null, "");
 			new Notice(`Voice Notes Plus: Microphone access denied or unavailable`);
 		}
@@ -166,7 +169,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		if (!this.recorder || !this.isRecording || !this.recordingTarget) return;
 
 		this.isRecording = false;
-		this.ribbonIconEl?.removeClass("voice-notes-plus-active");
+		this.updateRecordingUi();
 		this.updateStatusBar("recording_end", "Finishing...");
 
 		let outputInserted = false;
@@ -195,6 +198,7 @@ export default class VoiceNotesPlugin extends Plugin {
 				this.transcriptionManager = null;
 			}
 
+			this.updateRecordingUi();
 			this.updateStatusBar(null, "");
 		}
 
@@ -371,6 +375,48 @@ export default class VoiceNotesPlugin extends Plugin {
 
 	private sleep(ms: number): Promise<void> {
 		return new Promise((resolve) => window.setTimeout(resolve, ms));
+	}
+
+	private updateRecordingUi(): void {
+		if (this.ribbonIconEl) {
+			setIcon(this.ribbonIconEl, this.isRecording ? "square" : "microphone");
+			setTooltip(
+				this.ribbonIconEl,
+				this.isRecording ? "Stop voice recording" : "Start voice recording"
+			);
+			this.ribbonIconEl.toggleClass("voice-notes-plus-active", this.isRecording);
+		}
+
+		if (this.isRecording) {
+			this.showRecordingNotice();
+		} else {
+			this.hideRecordingNotice();
+		}
+	}
+
+	private showRecordingNotice(): void {
+		if (this.recordingNotice) return;
+
+		const notice = new Notice("", 0);
+		notice.messageEl.empty();
+		notice.messageEl.addClass("voice-notes-plus-recording-notice");
+		notice.messageEl.createDiv({
+			text: "Recording in progress",
+			cls: "voice-notes-plus-recording-notice-text",
+		});
+		const stopButton = notice.messageEl.createEl("button", {
+			text: "Stop Recording",
+			cls: "mod-cta voice-notes-plus-stop-button",
+		});
+		stopButton.addEventListener("click", () => {
+			void this.stopRecording();
+		});
+		this.recordingNotice = notice;
+	}
+
+	private hideRecordingNotice(): void {
+		this.recordingNotice?.hide();
+		this.recordingNotice = null;
 	}
 
 	private updateStatusBar(status: WorkerStatus | null, message: string): void {
