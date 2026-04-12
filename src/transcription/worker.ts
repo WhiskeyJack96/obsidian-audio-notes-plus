@@ -49,6 +49,11 @@ async function loadModels(modelId: string): Promise<void> {
 	// by the browser Cache API after first download.
 	env.allowLocalModels = false;
 
+	// Disable multi-threaded WASM. The threaded path spawns a sub-Worker
+	// that imports 'worker_threads' (a Node.js module), which fails in
+	// Obsidian's blob-URL worker context. Single-threaded WASM avoids this.
+	env.backends.onnx.wasm.numThreads = 1;
+
 	const device = (await supportsWebGPU()) ? "webgpu" : "wasm";
 	self.postMessage({ type: "info", message: `Using device: "${device}"` });
 	self.postMessage({ type: "status", status: "loading", message: "Loading models..." });

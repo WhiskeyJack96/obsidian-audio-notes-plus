@@ -51,14 +51,21 @@ const workerContext = await esbuild.context({
 	format: "esm",
 	outfile: "worker.js",
 	platform: "browser",
+	banner: {
+		// Shadow Electron's global `process` on the worker's own scope.
+		// Both Transformers.js and the external ort-wasm-simd-threaded
+		// .mjs files detect Node.js via different checks:
+		//   - Transformers.js: process?.release?.name === "node"
+		//   - ort .mjs files:  typeof process.versions.node === "string"
+		// If either is true, they import Node-only modules (onnxruntime-node,
+		// worker_threads) that fail in the blob-URL worker context.
+		// Removing `release.name` and `versions` forces both libraries to
+		// take the browser code path. This is safe because the worker is an
+		// isolated blob-URL context — the main thread's process is unaffected.
+		js: `if(typeof process!=="undefined"){self.process={...process,release:{...process.release,name:""},versions:{}};}`
+	},
 	define: {
 		"process.env.NODE_ENV": isProd ? '"production"' : '"development"',
-		// Force Transformers.js to use the browser/WASM code path.
-		// In Obsidian's Electron, process.release.name === "node" which
-		// makes IS_NODE_ENV true, causing it to import onnxruntime-node
-		// (shimmed to empty) instead of onnxruntime-web. This breaks
-		// ONNX.Tensor with "Right-hand side of instanceof is not an object".
-		"process.release": "undefined",
 	},
 });
 
