@@ -5,9 +5,7 @@
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "node esbuild.config.mjs production",
-    "copy-wasm": "node scripts/copy-wasm.mjs",
-    "postinstall": "npm run copy-wasm"
+    "build": "node esbuild.config.mjs production"
   },
   "keywords": [
     "obsidian",
