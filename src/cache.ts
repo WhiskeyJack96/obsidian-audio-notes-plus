@@ -10,6 +10,8 @@ const HUGGING_FACE_HOST = "https://huggingface.co";
 const HUGGING_FACE_REVISION = "main";
 const CACHE_ROOT_PROBE_FILE = ".cache-root";
 const CACHE_MANIFEST_FILE = "cache-manifest.json";
+const MOBILE_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
+const DESKTOP_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
 
 const MOONSHINE_ROOT_FILES = [
 	"config.json",
@@ -20,11 +22,9 @@ const MOONSHINE_ROOT_FILES = [
 	"tokenizer_config.json",
 ];
 
-const MOONSHINE_ONNX_FILES = [
-	"onnx/encoder_model.onnx",
-	"onnx/decoder_model_merged_q4.onnx",
-	"onnx/decoder_model_merged_quantized.onnx",
-];
+const MOONSHINE_ENCODER_FILE = "onnx/encoder_model.onnx";
+const MOONSHINE_DECODER_Q4_FILE = "onnx/decoder_model_merged_q4.onnx";
+const MOONSHINE_DECODER_Q8_FILE = "onnx/decoder_model_merged_quantized.onnx";
 
 const SILERO_FILES = [
 	"onnx/model.onnx",
@@ -48,6 +48,8 @@ const RUNTIME_FILES = [
 		url: `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}/dist/ort-wasm-simd-threaded.jsep.mjs`,
 	},
 ] as const;
+
+const MOBILE_RUNTIME_FILES = RUNTIME_FILES.filter((file) => !file.fileName.includes(".jsep."));
 
 interface CacheManifest {
 	schemaVersion: number;
@@ -76,7 +78,8 @@ export class AssetCacheManager {
 
 		const modelFiles = [
 			...MOONSHINE_ROOT_FILES,
-			...MOONSHINE_ONNX_FILES,
+			MOONSHINE_ENCODER_FILE,
+			this.shouldCacheQ4Decoder() ? MOONSHINE_DECODER_Q4_FILE : MOONSHINE_DECODER_Q8_FILE,
 		];
 
 		await this.ensureRepoFiles(modelId, modelFiles, modelsCacheDir, onProgress);
@@ -91,6 +94,7 @@ export class AssetCacheManager {
 		});
 
 		return {
+			assetMode: "local",
 			modelBaseUrl: this.getDirectoryResourceBase(
 				normalizePath(`${modelsCacheDir}/${CACHE_ROOT_PROBE_FILE}`),
 				CACHE_ROOT_PROBE_FILE
@@ -127,7 +131,7 @@ export class AssetCacheManager {
 		runtimeCacheDir: string,
 		onProgress?: (message: string) => void
 	): Promise<void> {
-		for (const file of RUNTIME_FILES) {
+		for (const file of this.getRuntimeFiles()) {
 			const relativePath = normalizePath(`${runtimeCacheDir}/${file.fileName}`);
 			if (await this.plugin.app.vault.adapter.exists(relativePath)) {
 				continue;
@@ -143,17 +147,65 @@ export class AssetCacheManager {
 
 	private async downloadBinary(url: string, relativePath: string): Promise<void> {
 		await this.ensureDir(this.dirname(relativePath));
+		await this.downloadBinaryChunked(url, relativePath);
+	}
 
-		const response = await requestUrl({
-			url,
-			throw: false,
-		});
+	private async downloadBinaryChunked(url: string, relativePath: string): Promise<void> {
+		const adapter = this.plugin.app.vault.adapter as typeof this.plugin.app.vault.adapter & {
+			appendBinary?: (normalizedPath: string, data: ArrayBuffer) => Promise<void>;
+			remove: (normalizedPath: string) => Promise<void>;
+			rename: (normalizedPath: string, normalizedNewPath: string) => Promise<void>;
+		};
+		const tempPath = normalizePath(`${relativePath}.part`);
+		const chunkSize = this.getDownloadChunkSize();
+		let start = 0;
+		let totalBytes: number | null = null;
+		let chunkIndex = 0;
 
-		if (response.status !== 200) {
-			throw new Error(`Failed to download ${url} (${response.status})`);
+		if (await adapter.exists(tempPath)) {
+			await adapter.remove(tempPath);
 		}
 
-		await this.plugin.app.vault.adapter.writeBinary(relativePath, response.arrayBuffer);
+		while (totalBytes === null || start < totalBytes) {
+			const end = totalBytes === null
+				? start + chunkSize - 1
+				: Math.min(start + chunkSize - 1, totalBytes - 1);
+			const response = await requestUrl({
+				url,
+				headers: {
+					Range: `bytes=${start}-${end}`,
+				},
+				throw: false,
+			});
+
+			if (response.status !== 206 && response.status !== 200) {
+				throw new Error(`Failed to download ${url} (${response.status})`);
+			}
+
+			if (totalBytes === null) {
+				totalBytes = this.getTotalBytes(response.headers, response.arrayBuffer.byteLength);
+			}
+
+			if (chunkIndex === 0) {
+				await adapter.writeBinary(tempPath, response.arrayBuffer);
+			} else if (typeof adapter.appendBinary === "function") {
+				await adapter.appendBinary(tempPath, response.arrayBuffer);
+			} else {
+				throw new Error("Chunked cache downloads require Obsidian 1.12.3+");
+			}
+
+			if (response.status === 200) {
+				break;
+			}
+
+			start += response.arrayBuffer.byteLength;
+			chunkIndex += 1;
+		}
+
+		if (await adapter.exists(relativePath)) {
+			await adapter.remove(relativePath);
+		}
+		await adapter.rename(tempPath, relativePath);
 	}
 
 	private getHuggingFaceResolveUrl(repoId: string, file: string): string {
@@ -194,6 +246,14 @@ export class AssetCacheManager {
 		return normalizePath(
 			`${this.getPluginCacheRoot()}/runtime/${this.getPlatformKey()}/transformers-${TRANSFORMERS_VERSION}-ort-${ORT_VERSION}`
 		);
+	}
+
+	private getRuntimeFiles(): typeof RUNTIME_FILES {
+		return Platform.isMobileApp ? MOBILE_RUNTIME_FILES : RUNTIME_FILES;
+	}
+
+	private shouldCacheQ4Decoder(): boolean {
+		return !Platform.isMobileApp;
 	}
 
 	private getPluginDir(): string {
@@ -250,5 +310,40 @@ export class AssetCacheManager {
 			}
 			await adapter.mkdir(current);
 		}
+	}
+
+	private getDownloadChunkSize(): number {
+		return Platform.isMobileApp ? MOBILE_CHUNK_SIZE_BYTES : DESKTOP_CHUNK_SIZE_BYTES;
+	}
+
+	private getTotalBytes(headers: Record<string, string>, fallback: number): number {
+		const contentRange = this.getHeader(headers, "content-range");
+		if (contentRange) {
+			const totalPart = contentRange.split("/")[1];
+			const parsed = Number.parseInt(totalPart, 10);
+			if (Number.isFinite(parsed)) {
+				return parsed;
+			}
+		}
+
+		const contentLength = this.getHeader(headers, "content-length");
+		if (contentLength) {
+			const parsed = Number.parseInt(contentLength, 10);
+			if (Number.isFinite(parsed)) {
+				return parsed;
+			}
+		}
+
+		return fallback;
+	}
+
+	private getHeader(headers: Record<string, string>, name: string): string | null {
+		const expected = name.toLowerCase();
+		for (const [key, value] of Object.entries(headers)) {
+			if (key.toLowerCase() === expected) {
+				return value;
+			}
+		}
+		return null;
 	}
 }

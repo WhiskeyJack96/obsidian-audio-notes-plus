@@ -9,7 +9,13 @@ export type WorkerOutMessage =
 
 /** Messages sent FROM the main thread TO the worker */
 export type WorkerInMessage =
-	| { type: "init"; modelId: string; modelBaseUrl: string; runtimeBaseUrl: string }
+	| {
+		type: "init";
+		modelId: string;
+		assetMode: "local" | "remote";
+		modelBaseUrl?: string;
+		runtimeBaseUrl?: string;
+	}
 	| { type: "flush" }
 	| { buffer: Float32Array };
 
@@ -45,6 +51,7 @@ export interface VoiceNotesSettings {
 }
 
 export interface LocalAssetConfig {
+	assetMode: "local" | "remote";
 	modelBaseUrl: string;
 	runtimeBaseUrl: string;
 	platformKey: string;
