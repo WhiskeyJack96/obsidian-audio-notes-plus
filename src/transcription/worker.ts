@@ -43,17 +43,21 @@ async function supportsWebGPU(): Promise<boolean> {
 	}
 }
 
-async function loadModels(modelId: string): Promise<void> {
-	// Don't override wasmPaths - let Transformers.js use its CDN default.
-	// Electron's blob worker context blocks file:// dynamic imports, so local
-	// .mjs bootstrappers can't be loaded. The CDN-fetched files get cached
-	// by the browser Cache API after first download.
-	env.allowLocalModels = false;
+async function loadModels(
+	modelId: string,
+	modelBaseUrl: string,
+	runtimeBaseUrl: string
+): Promise<void> {
+	env.allowLocalModels = true;
+	env.allowRemoteModels = false;
+	env.useBrowserCache = false;
+	env.localModelPath = modelBaseUrl;
 
 	// Disable multi-threaded WASM. The threaded path spawns a sub-Worker
 	// that imports 'worker_threads' (a Node.js module), which fails in
 	// Obsidian's blob-URL worker context. Single-threaded WASM avoids this.
 	env.backends.onnx.wasm.numThreads = 1;
+	env.backends.onnx.wasm.wasmPaths = runtimeBaseUrl;
 
 	const device = (await supportsWebGPU()) ? "webgpu" : "wasm";
 	self.postMessage({ type: "info", message: `Using device: "${device}"` });
@@ -63,6 +67,7 @@ async function loadModels(modelId: string): Promise<void> {
 	sileroVad = await AutoModel.from_pretrained("onnx-community/silero-vad", {
 		config: { model_type: "custom" },
 		dtype: "fp32",
+		local_files_only: true,
 	}).catch((error: Error) => {
 		self.postMessage({ type: "error", error: `Failed to load VAD model: ${error.message}` });
 		throw error;
@@ -76,6 +81,7 @@ async function loadModels(modelId: string): Promise<void> {
 	transcriber = await pipeline("automatic-speech-recognition", modelId, {
 		device,
 		dtype: dtypeConfig as Record<string, string>,
+		local_files_only: true,
 	}).catch((error: Error) => {
 		self.postMessage({ type: "error", error: `Failed to load transcription model: ${error.message}` });
 		throw error;
@@ -215,7 +221,7 @@ async function processAudioChunk(buffer: Float32Array): Promise<void> {
 
 async function handleMessage(data: { type?: string; modelId?: string; buffer?: Float32Array }): Promise<void> {
 	if (data.type === "init") {
-		await loadModels(data.modelId);
+		await loadModels(data.modelId, data.modelBaseUrl, data.runtimeBaseUrl);
 		return;
 	}
 

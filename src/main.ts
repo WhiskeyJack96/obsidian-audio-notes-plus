@@ -1,4 +1,5 @@
 import { MarkdownView, Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from "obsidian";
+import { AssetCacheManager } from "./cache";
 import { VoiceNotesSettingTab } from "./settings";
 import { TranscriptionManager } from "./transcription/manager";
 import { AudioRecorder } from "./recorder";
@@ -19,6 +20,7 @@ interface CommandManagerLike {
 export default class VoiceNotesPlugin extends Plugin {
 	settings: VoiceNotesSettings = DEFAULT_SETTINGS;
 	transcriptionManager: TranscriptionManager | null = null;
+	private assetCache: AssetCacheManager | null = null;
 	private recorder: AudioRecorder | null = null;
 	private statusBarEl: HTMLElement | null = null;
 	private isRecording = false;
@@ -29,6 +31,7 @@ export default class VoiceNotesPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.assetCache = new AssetCacheManager(this);
 		this.addSettingTab(new VoiceNotesSettingTab(this.app, this));
 
 		// Ribbon icon
@@ -88,6 +91,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.hideRecordingNotice();
 		this.transcriptionManager?.destroy();
 		this.transcriptionManager = null;
+		this.assetCache = null;
 	}
 
 	async loadSettings(): Promise<void> {
@@ -99,13 +103,23 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private async ensureModelsLoaded(): Promise<void> {
+		if (!this.assetCache) {
+			this.assetCache = new AssetCacheManager(this);
+		}
+
+		this.updateStatusBar("loading", "Caching models...");
+		const assetConfig = await this.assetCache.ensureTranscriptionAssets(
+			this.settings.modelSize,
+			(message) => this.updateStatusBar("loading", message)
+		);
+
 		if (!this.transcriptionManager) {
 			this.transcriptionManager = new TranscriptionManager(this);
 		}
 		if (!this.transcriptionManager.isReady) {
 			this.updateStatusBar("loading", "Loading models...");
 			new Notice("Voice Notes Plus: Downloading transcription models. This may take a minute on first use.");
-			await this.transcriptionManager.initialize();
+			await this.transcriptionManager.initialize(assetConfig);
 		}
 	}
 

@@ -9,7 +9,7 @@ export type WorkerOutMessage =
 
 /** Messages sent FROM the main thread TO the worker */
 export type WorkerInMessage =
-	| { type: "init"; modelId: string }
+	| { type: "init"; modelId: string; modelBaseUrl: string; runtimeBaseUrl: string }
 	| { type: "flush" }
 	| { buffer: Float32Array };
 
@@ -42,6 +42,12 @@ export interface VoiceNotesSettings {
 
 	/** Keep models loaded in memory between recordings */
 	keepModelsLoaded: boolean;
+}
+
+export interface LocalAssetConfig {
+	modelBaseUrl: string;
+	runtimeBaseUrl: string;
+	platformKey: string;
 }
 
 export const DEFAULT_SETTINGS: VoiceNotesSettings = {

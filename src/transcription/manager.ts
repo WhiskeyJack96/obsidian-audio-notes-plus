@@ -1,6 +1,6 @@
 import { Notice } from "obsidian";
 import type VoiceNotesPlugin from "../main";
-import type { WorkerOutMessage, RecordingCallbacks, WorkerStatus } from "../types";
+import type { LocalAssetConfig, WorkerOutMessage, RecordingCallbacks, WorkerStatus } from "../types";
 import { MODEL_IDS } from "../types";
 
 // Injected at build time by esbuild — the worker bundle as Base64.
@@ -12,14 +12,19 @@ export class TranscriptionManager {
 	private flushPromise: Promise<void> | null = null;
 	private resolveFlush: (() => void) | null = null;
 	private flushTimeoutId: number | null = null;
+	private loadedModelId: string | null = null;
 	isReady = false;
 
 	constructor(private plugin: VoiceNotesPlugin) {}
 
-	async initialize(): Promise<void> {
-		if (this.worker) return;
-
+	async initialize(assetConfig: LocalAssetConfig): Promise<void> {
 		const modelId = MODEL_IDS[this.plugin.settings.modelSize];
+		if (this.worker && this.loadedModelId === modelId) {
+			return;
+		}
+		if (this.worker) {
+			this.destroy();
+		}
 
 		// Decode the inlined worker from Base64 and create a Blob URL.
 		// This avoids needing a separate worker.js file on disk, which
@@ -38,11 +43,17 @@ export class TranscriptionManager {
 			this.callbacks?.onError(event.message);
 			new Notice(`Voice Notes Plus: Worker error - ${event.message}`);
 		};
+		this.loadedModelId = modelId;
 
 		// Send init message with model ID.
 		// WASM paths are left at the Transformers.js CDN default since
 		// Electron's blob worker context can't load local file:// URLs.
-		this.worker.postMessage({ type: "init", modelId });
+		this.worker.postMessage({
+			type: "init",
+			modelId,
+			modelBaseUrl: assetConfig.modelBaseUrl,
+			runtimeBaseUrl: assetConfig.runtimeBaseUrl,
+		});
 	}
 
 	private handleMessage(data: WorkerOutMessage): void {
@@ -113,6 +124,7 @@ export class TranscriptionManager {
 		this.worker = null;
 		this.isReady = false;
 		this.callbacks = null;
+		this.loadedModelId = null;
 	}
 
 	private completeFlush(): void {
