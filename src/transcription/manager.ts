@@ -1,7 +1,10 @@
-import { FileSystemAdapter, Notice } from "obsidian";
+import { Notice } from "obsidian";
 import type VoiceNotesPlugin from "../main";
 import type { WorkerOutMessage, RecordingCallbacks, WorkerStatus } from "../types";
 import { MODEL_IDS } from "../types";
+
+// Injected at build time by esbuild — the worker bundle as Base64.
+declare const WORKER_BASE64: string;
 
 export class TranscriptionManager {
 	private worker: Worker | null = null;
@@ -13,19 +16,14 @@ export class TranscriptionManager {
 	async initialize(): Promise<void> {
 		if (this.worker) return;
 
-		const adapter = this.plugin.app.vault.adapter;
-		if (!(adapter instanceof FileSystemAdapter)) {
-			throw new Error("Voice Notes Plus requires a local filesystem vault");
-		}
-
-		const basePath = adapter.getBasePath();
-		const pluginDir = this.plugin.manifest.dir;
 		const modelId = MODEL_IDS[this.plugin.settings.modelSize];
 
-		// Load worker via Blob URL - Electron blocks file:// Workers,
-		// and the blob approach works for the main worker JS.
-		const workerBytes = await adapter.readBinary(`${pluginDir}/worker.js`);
-		const blob = new Blob([workerBytes], { type: "application/javascript" });
+		// Decode the inlined worker from Base64 and create a Blob URL.
+		// This avoids needing a separate worker.js file on disk, which
+		// is required because BRAT and the community plugin store only
+		// distribute main.js, manifest.json, and styles.css.
+		const workerCode = atob(WORKER_BASE64);
+		const blob = new Blob([workerCode], { type: "application/javascript" });
 		const blobUrl = URL.createObjectURL(blob);
 		this.worker = new Worker(blobUrl, { type: "module" });
 		URL.revokeObjectURL(blobUrl);
