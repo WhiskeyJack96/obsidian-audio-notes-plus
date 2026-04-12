@@ -219,6 +219,8 @@ self.onmessage = async (event: MessageEvent) => {
 
 	if (data.type === "flush") {
 		flushBuffer();
+		await inferenceChain;
+		self.postMessage({ type: "flush-complete" });
 		return;
 	}
 

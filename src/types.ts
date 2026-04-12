@@ -2,6 +2,7 @@
 export type WorkerOutMessage =
 	| { type: "status"; status: WorkerStatus; message: string }
 	| { type: "output"; message: string; start: number; end: number; duration: number }
+	| { type: "flush-complete" }
 	| { type: "error"; error: string }
 	| { type: "download-progress"; file: string; progress: number; loaded: number; total: number }
 	| { type: "info"; message: string };
@@ -36,6 +37,8 @@ export interface VoiceNotesSettings {
 
 	/** Obsidian command ID to execute after transcription completes */
 	postTranscriptionCommandId: string;
+	/** Obsidian command ID to create/open a target note before recording */
+	newNoteCommandId: string;
 
 	/** Keep models loaded in memory between recordings */
 	keepModelsLoaded: boolean;
@@ -48,6 +51,7 @@ export const DEFAULT_SETTINGS: VoiceNotesSettings = {
 	speechThreshold: 0.3,
 	silenceDuration: 400,
 	postTranscriptionCommandId: "",
+	newNoteCommandId: "",
 	keepModelsLoaded: true,
 };
 

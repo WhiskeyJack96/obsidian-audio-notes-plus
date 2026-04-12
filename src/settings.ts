@@ -1,7 +1,44 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { AbstractInputSuggest, App, PluginSettingTab, Setting } from "obsidian";
 import type VoiceNotesPlugin from "./main";
 import { DEFAULT_SETTINGS } from "./types";
 import type { VoiceNotesSettings } from "./types";
+
+interface CommandSuggestion {
+	id: string;
+	name: string;
+}
+
+interface CommandManagerLike {
+	commands: Record<string, CommandSuggestion>;
+}
+
+class CommandInputSuggest extends AbstractInputSuggest<CommandSuggestion> {
+	constructor(
+		app: App,
+		textInputEl: HTMLInputElement,
+		private getCommands: () => CommandSuggestion[]
+	) {
+		super(app, textInputEl);
+	}
+
+	protected getSuggestions(query: string): CommandSuggestion[] {
+		const normalizedQuery = query.trim().toLowerCase();
+		return this.getCommands()
+			.filter((command) => {
+				if (!normalizedQuery) return true;
+				return (
+					command.name.toLowerCase().includes(normalizedQuery) ||
+					command.id.toLowerCase().includes(normalizedQuery)
+				);
+			})
+			.slice(0, 50);
+	}
+
+	renderSuggestion(command: CommandSuggestion, el: HTMLElement): void {
+		el.createDiv({ text: command.name });
+		el.createEl("small", { text: command.id });
+	}
+}
 
 export class VoiceNotesSettingTab extends PluginSettingTab {
 	plugin: VoiceNotesPlugin;
@@ -114,13 +151,60 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 				"then this command runs. Leave empty to disable."
 			)
 			.addText((text) =>
-				text
-					.setPlaceholder("e.g., my-llm-plugin:format-selection")
-					.setValue(this.plugin.settings.postTranscriptionCommandId)
-					.onChange(async (value) => {
+				this.configureCommandText(
+					text.inputEl,
+					this.plugin.settings.postTranscriptionCommandId,
+					"e.g., my-llm-plugin:format-selection",
+					async (value) => {
 						this.plugin.settings.postTranscriptionCommandId = value;
 						await this.plugin.saveSettings();
-					})
+					}
+				)
 			);
+
+		new Setting(containerEl)
+			.setName("New note command")
+			.setDesc(
+				"Command to execute before 'Start voice recording in new note'. " +
+				"It should create or focus the note that should receive the audio clip and transcript."
+			)
+			.addText((text) =>
+				this.configureCommandText(
+					text.inputEl,
+					this.plugin.settings.newNoteCommandId,
+					"e.g., workspace:new-tab",
+					async (value) => {
+						this.plugin.settings.newNoteCommandId = value;
+						await this.plugin.saveSettings();
+					}
+				)
+			);
+	}
+
+	private configureCommandText(
+		inputEl: HTMLInputElement,
+		value: string,
+		placeholder: string,
+		onChange: (value: string) => Promise<void>
+	): void {
+		inputEl.placeholder = placeholder;
+		inputEl.value = value;
+
+		const suggest = new CommandInputSuggest(this.app, inputEl, () => this.getAvailableCommands());
+		suggest.onSelect(async (command) => {
+			inputEl.value = command.id;
+			await onChange(command.id);
+		});
+
+		inputEl.addEventListener("change", () => {
+			void onChange(inputEl.value.trim());
+		});
+	}
+
+	private getAvailableCommands(): CommandSuggestion[] {
+		const commandManager = (this.app as unknown as { commands: CommandManagerLike }).commands;
+		return Object.values(commandManager.commands)
+			.slice()
+			.sort((left, right) => left.name.localeCompare(right.name));
 	}
 }

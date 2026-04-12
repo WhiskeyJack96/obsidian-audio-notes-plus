@@ -9,6 +9,9 @@ declare const WORKER_BASE64: string;
 export class TranscriptionManager {
 	private worker: Worker | null = null;
 	private callbacks: RecordingCallbacks | null = null;
+	private flushPromise: Promise<void> | null = null;
+	private resolveFlush: (() => void) | null = null;
+	private flushTimeoutId: number | null = null;
 	isReady = false;
 
 	constructor(private plugin: VoiceNotesPlugin) {}
@@ -53,7 +56,11 @@ export class TranscriptionManager {
 			case "output":
 				this.callbacks?.onTranscription(data.message);
 				break;
+			case "flush-complete":
+				this.completeFlush();
+				break;
 			case "error":
+				this.completeFlush();
 				this.callbacks?.onError(data.error);
 				new Notice(`Voice Notes Plus: ${data.error}`);
 				break;
@@ -80,14 +87,42 @@ export class TranscriptionManager {
 		this.worker.postMessage({ buffer }, [buffer.buffer]);
 	}
 
-	flush(): void {
-		this.worker?.postMessage({ type: "flush" });
+	flush(): Promise<void> {
+		if (!this.worker) return Promise.resolve();
+		if (this.flushPromise) return this.flushPromise;
+
+		this.flushPromise = new Promise((resolve) => {
+			this.resolveFlush = () => {
+				this.clearFlushTimeout();
+				this.flushPromise = null;
+				this.resolveFlush = null;
+				resolve();
+			};
+			this.flushTimeoutId = window.setTimeout(() => {
+				this.completeFlush();
+			}, 10000);
+		});
+
+		this.worker.postMessage({ type: "flush" });
+		return this.flushPromise;
 	}
 
 	destroy(): void {
+		this.completeFlush();
 		this.worker?.terminate();
 		this.worker = null;
 		this.isReady = false;
 		this.callbacks = null;
+	}
+
+	private completeFlush(): void {
+		this.resolveFlush?.();
+	}
+
+	private clearFlushTimeout(): void {
+		if (this.flushTimeoutId !== null) {
+			window.clearTimeout(this.flushTimeoutId);
+			this.flushTimeoutId = null;
+		}
 	}
 }
