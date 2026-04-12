@@ -1,0 +1,31 @@
+{
+  "name": "voice-notes-plus",
+  "version": "0.1.0",
+  "description": "Record audio in-note and transcribe locally using Moonshine AI.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "copy-wasm": "node scripts/copy-wasm.mjs",
+    "postinstall": "npm run copy-wasm"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "speech-to-text",
+    "transcription",
+    "moonshine"
+  ],
+  "author": "Jacob Mikesell",
+  "license": "MIT",
+  "dependencies": {
+    "@huggingface/transformers": "3.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.9",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.28.0",
+    "obsidian": "latest",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,34 @@
+/*
+ * Styles for voice-notes-plus
+ *
+ * Uses Obsidian CSS variables for theme compatibility.
+ * All selectors scoped to plugin containers.
+ */
+
+.voice-notes-plus-status-recording {
+  color: var(--text-error);
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+}
+
+.voice-notes-plus-status-recording .voice-notes-plus-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--text-error);
+  animation: voice-notes-plus-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes voice-notes-plus-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.voice-notes-plus-status-transcribing {
+  color: var(--text-accent);
+}
+
+.voice-notes-plus-status-loading {
+  color: var(--text-muted);
+}

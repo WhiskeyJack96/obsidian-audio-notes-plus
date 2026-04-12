@@ -1,0 +1,27 @@
+# Dependency directories
+node_modules/
+.npm-cache/
+
+# Build output
+main.js
+main.js.map
+worker.js
+worker.js.map
+
+# ONNX Runtime files (copied from node_modules at install time)
+*.wasm
+ort-wasm-*.mjs
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Idea/planning files
+idea.md
