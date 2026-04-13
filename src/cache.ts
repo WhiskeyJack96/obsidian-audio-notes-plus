@@ -265,7 +265,27 @@ export class AssetCacheManager {
 
 	private async downloadBinary(url: string, relativePath: string): Promise<void> {
 		await this.ensureDir(this.dirname(relativePath));
-		await this.downloadBinaryChunked(url, relativePath);
+
+		// On mobile, Obsidian's requestUrl (Capacitor HTTP bridge) does
+		// not reliably handle Range/206 responses - the arrayBuffer can
+		// come back empty, causing an infinite retry loop.  Download the
+		// full file in one shot instead; the files are small enough
+		// (~10-15 MB max for runtime WASM) that this is fine.
+		if (Platform.isMobileApp) {
+			await this.downloadBinaryWhole(url, relativePath);
+		} else {
+			await this.downloadBinaryChunked(url, relativePath);
+		}
+	}
+
+	private async downloadBinaryWhole(url: string, relativePath: string): Promise<void> {
+		const response = await requestUrl({ url, throw: false });
+
+		if (response.status < 200 || response.status >= 300) {
+			throw new Error(`Failed to download ${url} (${response.status})`);
+		}
+
+		await this.plugin.app.vault.adapter.writeBinary(relativePath, response.arrayBuffer);
 	}
 
 	private async downloadBinaryChunked(url: string, relativePath: string): Promise<void> {
@@ -302,6 +322,11 @@ export class AssetCacheManager {
 
 			if (totalBytes === null) {
 				totalBytes = this.getTotalBytes(response.headers, response.arrayBuffer.byteLength);
+			}
+
+			// Guard against zero-length responses that would loop forever.
+			if (response.arrayBuffer.byteLength === 0) {
+				throw new Error(`Server returned an empty response for ${url}`);
 			}
 
 			if (chunkIndex === 0) {
