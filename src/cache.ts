@@ -3,6 +3,17 @@ import { MODEL_IDS } from "./types";
 import type VoiceNotesPlugin from "./main";
 import type { LocalAssetConfig, VoiceNotesSettings } from "./types";
 
+export interface CachedFileInfo {
+	/** Display label (e.g. "onnx-community/moonshine-base-ONNX/config.json") */
+	label: string;
+	/** Vault-relative path */
+	vaultPath: string;
+	/** Whether the file currently exists on disk */
+	exists: boolean;
+	/** File size in bytes (0 if missing) */
+	bytes: number;
+}
+
 const CACHE_SCHEMA_VERSION = 1;
 const TRANSFORMERS_VERSION = "3.7.1";
 const ORT_VERSION = "1.22.0-dev.20250409-89f8206ba4";
@@ -61,6 +72,70 @@ interface CacheManifest {
 
 export class AssetCacheManager {
 	constructor(private plugin: VoiceNotesPlugin) {}
+
+	/**
+	 * Return status info for every file the current settings require.
+	 */
+	async getCacheStatus(
+		modelSize: VoiceNotesSettings["modelSize"]
+	): Promise<CachedFileInfo[]> {
+		const modelId = MODEL_IDS[modelSize];
+		const modelsCacheDir = this.getModelsCacheDir();
+		const runtimeCacheDir = this.getRuntimeCacheDir();
+		const adapter = this.plugin.app.vault.adapter;
+		const results: CachedFileInfo[] = [];
+
+		const modelFiles = [
+			...MOONSHINE_ROOT_FILES,
+			MOONSHINE_ENCODER_FILE,
+			this.shouldCacheQ4Decoder()
+				? MOONSHINE_DECODER_Q4_FILE
+				: MOONSHINE_DECODER_Q8_FILE,
+		];
+
+		const repoEntries: Array<{ repo: string; file: string }> = [
+			...modelFiles.map((f) => ({ repo: modelId, file: f })),
+			...SILERO_FILES.map((f) => ({ repo: "onnx-community/silero-vad", file: f })),
+		];
+
+		for (const { repo, file } of repoEntries) {
+			const vaultPath = normalizePath(`${modelsCacheDir}/${repo}/${file}`);
+			const exists = await adapter.exists(vaultPath);
+			let bytes = 0;
+			if (exists) {
+				const stat = await adapter.stat(vaultPath);
+				bytes = stat?.size ?? 0;
+			}
+			results.push({ label: `${repo}/${file}`, vaultPath, exists, bytes });
+		}
+
+		for (const rtFile of this.getRuntimeFiles()) {
+			const vaultPath = normalizePath(`${runtimeCacheDir}/${rtFile.fileName}`);
+			const exists = await adapter.exists(vaultPath);
+			let bytes = 0;
+			if (exists) {
+				const stat = await adapter.stat(vaultPath);
+				bytes = stat?.size ?? 0;
+			}
+			results.push({ label: `runtime/${rtFile.fileName}`, vaultPath, exists, bytes });
+		}
+
+		return results;
+	}
+
+	/**
+	 * Delete all cached files so the next ensureTranscriptionAssets
+	 * re-downloads everything from scratch.
+	 */
+	async clearCache(): Promise<void> {
+		const adapter = this.plugin.app.vault.adapter as typeof this.plugin.app.vault.adapter & {
+			rmdir: (normalizedPath: string, recursive: boolean) => Promise<void>;
+		};
+		const root = this.getPluginCacheRoot();
+		if (await adapter.exists(root)) {
+			await adapter.rmdir(root, true);
+		}
+	}
 
 	async ensureTranscriptionAssets(
 		modelSize: VoiceNotesSettings["modelSize"],
@@ -132,12 +207,11 @@ export class AssetCacheManager {
 				continue;
 			}
 
-			onProgress?.(`Downloading ${repoId}/${file}...`);
+			onProgress?.(`Caching ${repoId}/${file}`);
 			await this.downloadBinary(
 				this.getHuggingFaceResolveUrl(repoId, file),
 				relativePath
 			);
-			onProgress?.(`Cached ${repoId}/${file}`);
 		}
 	}
 
@@ -151,12 +225,11 @@ export class AssetCacheManager {
 				continue;
 			}
 
-			onProgress?.(`Downloading runtime ${file.fileName}...`);
+			onProgress?.(`Caching runtime ${file.fileName}`);
 			await this.downloadBinary(
 				file.url,
 				relativePath
 			);
-			onProgress?.(`Cached runtime ${file.fileName}`);
 		}
 	}
 

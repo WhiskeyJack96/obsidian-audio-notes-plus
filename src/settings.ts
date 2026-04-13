@@ -1,4 +1,6 @@
-import { AbstractInputSuggest, App, PluginSettingTab, Setting } from "obsidian";
+import { AbstractInputSuggest, App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { AssetCacheManager } from "./cache";
+import type { CachedFileInfo } from "./cache";
 import type VoiceNotesPlugin from "./main";
 import { DEFAULT_SETTINGS } from "./types";
 import type { VoiceNotesSettings } from "./types";
@@ -179,6 +181,100 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 					}
 				)
 			);
+
+		// -- Cache section --
+		new Setting(containerEl).setName("Model cache").setHeading();
+
+		const cacheListEl = containerEl.createDiv({ cls: "voice-notes-plus-cache-list" });
+		this.renderCacheStatus(cacheListEl);
+
+		new Setting(containerEl)
+			.setName("Re-download all models")
+			.setDesc("Delete the local cache and download every model and runtime file again.")
+			.addButton((button) =>
+				button
+					.setButtonText("Re-download")
+					.setWarning()
+					.onClick(async () => {
+						button.setDisabled(true);
+						button.setButtonText("Working...");
+						try {
+							const cache = new AssetCacheManager(this.plugin);
+							await cache.clearCache();
+							await cache.ensureTranscriptionAssets(
+								this.plugin.settings.modelSize
+							);
+							// Tear down the loaded worker so the next
+							// recording picks up the fresh files.
+							this.plugin.transcriptionManager?.destroy();
+							this.plugin.transcriptionManager = null;
+							new Notice("Voice Notes Plus: Cache rebuilt successfully.");
+						} catch (e) {
+							new Notice(
+								`Voice Notes Plus: Cache rebuild failed - ${e instanceof Error ? e.message : String(e)}`
+							);
+						} finally {
+							button.setDisabled(false);
+							button.setButtonText("Re-download");
+							this.renderCacheStatus(cacheListEl);
+						}
+					})
+			);
+	}
+
+	private renderCacheStatus(container: HTMLElement): void {
+		container.empty();
+		container.createEl("p", {
+			text: "Loading cache status...",
+			cls: "voice-notes-plus-cache-loading",
+		});
+
+		const cache = new AssetCacheManager(this.plugin);
+		cache.getCacheStatus(this.plugin.settings.modelSize).then((files) => {
+			container.empty();
+
+			if (files.length === 0) {
+				container.createEl("p", { text: "No files expected for current settings." });
+				return;
+			}
+
+			const table = container.createEl("table", { cls: "voice-notes-plus-cache-table" });
+			const thead = table.createEl("thead");
+			const headerRow = thead.createEl("tr");
+			headerRow.createEl("th", { text: "File" });
+			headerRow.createEl("th", { text: "Size" });
+			headerRow.createEl("th", { text: "Status" });
+
+			const tbody = table.createEl("tbody");
+			let totalBytes = 0;
+
+			for (const file of files) {
+				const row = tbody.createEl("tr");
+				row.createEl("td", { text: file.label, cls: "voice-notes-plus-cache-file-label" });
+				row.createEl("td", { text: file.exists ? this.formatBytes(file.bytes) : "-" });
+				const statusCell = row.createEl("td");
+				if (file.exists) {
+					statusCell.createSpan({ text: "Cached", cls: "voice-notes-plus-cache-ok" });
+				} else {
+					statusCell.createSpan({ text: "Missing", cls: "voice-notes-plus-cache-missing" });
+				}
+				totalBytes += file.bytes;
+			}
+
+			const cachedCount = files.filter((f) => f.exists).length;
+			container.createEl("p", {
+				text: `${cachedCount}/${files.length} files cached (${this.formatBytes(totalBytes)} total)`,
+				cls: "setting-item-description",
+			});
+		});
+	}
+
+	private formatBytes(bytes: number): string {
+		if (bytes === 0) return "0 B";
+		const units = ["B", "KB", "MB", "GB"];
+		const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+		const value = bytes / Math.pow(1024, i);
+		return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 	}
 
 	private configureCommandText(

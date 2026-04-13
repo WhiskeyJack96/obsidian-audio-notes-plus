@@ -48,3 +48,36 @@
 .voice-notes-plus-stop-button {
   white-space: nowrap;
 }
+
+/* Cache management table in settings */
+.voice-notes-plus-cache-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui-smaller);
+  margin-bottom: var(--size-4-2);
+}
+
+.voice-notes-plus-cache-table th {
+  text-align: left;
+  padding: var(--size-4-1) var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-weight: var(--font-medium);
+}
+
+.voice-notes-plus-cache-table td {
+  padding: var(--size-4-1) var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+}
+
+.voice-notes-plus-cache-file-label {
+  word-break: break-all;
+}
+
+.voice-notes-plus-cache-ok {
+  color: var(--text-success);
+}
+
+.voice-notes-plus-cache-missing {
+  color: var(--text-error);
+}

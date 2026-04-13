@@ -110,20 +110,15 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.updateStatusBar("loading", "Caching models...");
 		const assetConfig = await this.assetCache.ensureTranscriptionAssets(
 			this.settings.modelSize,
-			(message) => {
-				this.updateStatusBar("loading", message);
-				new Notice(`Voice Notes Plus: ${message}`);
-			}
+			(message) => this.updateStatusBar("loading", message)
 		);
-
-		new Notice("Voice Notes Plus: All assets cached and ready.");
 
 		if (!this.transcriptionManager) {
 			this.transcriptionManager = new TranscriptionManager(this);
 		}
 		if (!this.transcriptionManager.isReady) {
 			this.updateStatusBar("loading", "Loading models...");
-			new Notice("Voice Notes Plus: Loading transcription models. This may take a minute on first use.");
+			new Notice("Voice Notes Plus: Downloading transcription models. This may take a minute on first use.");
 			await this.transcriptionManager.initialize(assetConfig);
 		}
 	}
