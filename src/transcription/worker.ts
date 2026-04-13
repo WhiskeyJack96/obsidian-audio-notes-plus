@@ -23,11 +23,12 @@ let transcriber: AutomaticSpeechRecognitionPipeline;
 let sileroVad: Awaited<ReturnType<typeof AutoModel.from_pretrained>>;
 let inferenceChain = Promise.resolve();
 let messageQueue = Promise.resolve();
+let workerReady = false;
 let isRecording = false;
 let bufferPointer = 0;
 let postSpeechSamples = 0;
 let prevBuffers: Float32Array[] = [];
-let BUFFER: Float32Array;
+let BUFFER = new Float32Array(MAX_BUFFER_DURATION * SAMPLE_RATE);
 
 // Silero VAD state tensors
 const sr = new Tensor("int64", [BigInt(SAMPLE_RATE)], []);
@@ -59,11 +60,10 @@ const MOBILE_MODEL_PREFIX = "http://voice-notes-plus.local/models/";
  */
 function installBlobAssets(
 	assetBlobs: Record<string, ArrayBuffer>,
-	_modelBaseUrl: string,
-	_runtimeBaseUrl: string
 ): {
 	modelBaseUrl: string;
 	wasmPaths: Record<string, string>;
+	wasmBinary: ArrayBuffer | undefined;
 } {
 	const blobUrlMap = new Map<string, string>();
 
@@ -80,12 +80,10 @@ function installBlobAssets(
 		blobUrlMap.set(MOBILE_MODEL_PREFIX + relativePath, url);
 	}
 
-	// Build blob URLs for runtime files
-	const wasmBuf = assetBlobs["runtime/ort-wasm-simd-threaded.wasm"];
-	const mjsBuf = assetBlobs["runtime/ort-wasm-simd-threaded.mjs"];
-	const wasmBlobUrl = wasmBuf
-		? URL.createObjectURL(new Blob([wasmBuf], { type: "application/wasm" }))
-		: "";
+	// Build blob URLs for runtime files.  The bundled onnxruntime-web
+	// always requests the .jsep. variants.
+	const wasmBuf = assetBlobs["runtime/ort-wasm-simd-threaded.jsep.wasm"];
+	const mjsBuf = assetBlobs["runtime/ort-wasm-simd-threaded.jsep.mjs"];
 	const mjsBlobUrl = mjsBuf
 		? URL.createObjectURL(new Blob([mjsBuf], { type: "application/javascript" }))
 		: "";
@@ -114,7 +112,10 @@ function installBlobAssets(
 
 	return {
 		modelBaseUrl: MOBILE_MODEL_PREFIX,
-		wasmPaths: { mjs: mjsBlobUrl, wasm: wasmBlobUrl },
+		// mjs blob URL for the Emscripten JS glue (loaded via import()).
+		// wasmBinary is passed separately so Emscripten skips fetching .wasm.
+		wasmPaths: { mjs: mjsBlobUrl },
+		wasmBinary: wasmBuf,
 	};
 }
 
@@ -135,9 +136,13 @@ async function loadModels(
 
 	if (assetBlobs) {
 		// Mobile path: serve everything from in-memory blob URLs.
-		const resolved = installBlobAssets(assetBlobs, modelBaseUrl, runtimeBaseUrl);
+		const resolved = installBlobAssets(assetBlobs);
 		env.localModelPath = resolved.modelBaseUrl;
 		env.backends.onnx.wasm.wasmPaths = resolved.wasmPaths;
+		// Pass the WASM binary directly so Emscripten skips fetching it.
+		if (resolved.wasmBinary) {
+			env.backends.onnx.wasm.wasmBinary = resolved.wasmBinary;
+		}
 	} else {
 		// Desktop path: resource URLs (app://) are fetchable directly.
 		env.localModelPath = modelBaseUrl;
@@ -172,12 +177,10 @@ async function loadModels(
 		throw error;
 	});
 
-	// Warm-up inference to compile shaders
+	// Warm-up inference to compile shaders / verify WASM works
 	await transcriber(new Float32Array(SAMPLE_RATE));
 
-	// Initialize global buffer
-	BUFFER = new Float32Array(MAX_BUFFER_DURATION * SAMPLE_RATE);
-
+	workerReady = true;
 	self.postMessage({ type: "status", status: "ready", message: "Ready" });
 }
 
@@ -245,6 +248,8 @@ function dispatchForTranscriptionAndReset(overflow?: Float32Array): void {
 }
 
 function flushBuffer(): void {
+	if (!workerReady) return;
+
 	if (bufferPointer > MIN_SPEECH_DURATION_SAMPLES) {
 		dispatchForTranscriptionAndReset();
 	} else {
@@ -254,6 +259,8 @@ function flushBuffer(): void {
 }
 
 async function processAudioChunk(buffer: Float32Array): Promise<void> {
+	if (!workerReady) return;
+
 	const wasRecording = isRecording;
 	const isSpeech = await vad(buffer);
 
