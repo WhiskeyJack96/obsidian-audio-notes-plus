@@ -45,15 +45,24 @@ export class TranscriptionManager {
 		};
 		this.loadedModelId = modelId;
 
-		// Send init message with model ID.
-		// WASM paths are left at the Transformers.js CDN default since
-		// Electron's blob worker context can't load local file:// URLs.
-		this.worker.postMessage({
+		const initMsg: Record<string, unknown> = {
 			type: "init",
 			modelId,
 			modelBaseUrl: assetConfig.modelBaseUrl,
 			runtimeBaseUrl: assetConfig.runtimeBaseUrl,
-		});
+		};
+
+		// On mobile, transfer the pre-read ArrayBuffers to the worker so
+		// it can create fetchable blob URLs in its own scope.
+		const transfer: ArrayBuffer[] = [];
+		if (assetConfig.assetBlobs) {
+			initMsg.assetBlobs = assetConfig.assetBlobs;
+			for (const buf of Object.values(assetConfig.assetBlobs)) {
+				transfer.push(buf);
+			}
+		}
+
+		this.worker.postMessage(initMsg, transfer);
 	}
 
 	private handleMessage(data: WorkerOutMessage): void {

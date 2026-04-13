@@ -43,21 +43,106 @@ async function supportsWebGPU(): Promise<boolean> {
 	}
 }
 
+// Synthetic URL prefix used on mobile when real file:// URLs are not
+// fetchable from within this blob-URL worker.
+const MOBILE_MODEL_PREFIX = "http://voice-notes-plus.local/models/";
+
+/**
+ * On mobile, Obsidian's getResourcePath returns file:// URLs which
+ * cannot be fetched from a blob-URL Web Worker.  When the main thread
+ * provides pre-read ArrayBuffers (assetBlobs), we create blob URLs
+ * inside the worker scope and install a fetch interceptor so that
+ * Transformers.js and ONNX Runtime resolve every model/runtime file
+ * from memory instead of the network.
+ *
+ * Returns { modelBaseUrl, wasmPaths } to use for this session.
+ */
+function installBlobAssets(
+	assetBlobs: Record<string, ArrayBuffer>,
+	_modelBaseUrl: string,
+	_runtimeBaseUrl: string
+): {
+	modelBaseUrl: string;
+	wasmPaths: Record<string, string>;
+} {
+	const blobUrlMap = new Map<string, string>();
+
+	// Build blob URLs for every model file keyed under "models/..."
+	for (const [key, buffer] of Object.entries(assetBlobs)) {
+		if (!key.startsWith("models/")) continue;
+		// Strip the "models/" prefix to get the relative path that
+		// Transformers.js will append to localModelPath.
+		const relativePath = key.slice("models/".length);
+		const mime = key.endsWith(".onnx")
+			? "application/octet-stream"
+			: "application/json";
+		const url = URL.createObjectURL(new Blob([buffer], { type: mime }));
+		blobUrlMap.set(MOBILE_MODEL_PREFIX + relativePath, url);
+	}
+
+	// Build blob URLs for runtime files
+	const wasmBuf = assetBlobs["runtime/ort-wasm-simd-threaded.wasm"];
+	const mjsBuf = assetBlobs["runtime/ort-wasm-simd-threaded.mjs"];
+	const wasmBlobUrl = wasmBuf
+		? URL.createObjectURL(new Blob([wasmBuf], { type: "application/wasm" }))
+		: "";
+	const mjsBlobUrl = mjsBuf
+		? URL.createObjectURL(new Blob([mjsBuf], { type: "application/javascript" }))
+		: "";
+
+	// Override fetch so Transformers.js and Emscripten resolve from blob
+	// URLs instead of trying to hit the filesystem.
+	const originalFetch = self.fetch.bind(self);
+	self.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+		const url = typeof input === "string"
+			? input
+			: input instanceof URL
+				? input.href
+				: input.url;
+		const blobUrl = blobUrlMap.get(url);
+		if (blobUrl) {
+			return originalFetch(blobUrl, init);
+		}
+		// Return a clean 404 for model-prefixed URLs that are not in the
+		// map (e.g. optional config files), so Transformers.js falls back
+		// gracefully instead of throwing a network error.
+		if (url.startsWith(MOBILE_MODEL_PREFIX)) {
+			return Promise.resolve(new Response(null, { status: 404 }));
+		}
+		return originalFetch(input, init);
+	}) as typeof self.fetch;
+
+	return {
+		modelBaseUrl: MOBILE_MODEL_PREFIX,
+		wasmPaths: { mjs: mjsBlobUrl, wasm: wasmBlobUrl },
+	};
+}
+
 async function loadModels(
 	modelId: string,
 	modelBaseUrl: string,
-	runtimeBaseUrl: string
+	runtimeBaseUrl: string,
+	assetBlobs?: Record<string, ArrayBuffer>
 ): Promise<void> {
 	env.allowLocalModels = true;
 	env.allowRemoteModels = false;
 	env.useBrowserCache = false;
-	env.localModelPath = modelBaseUrl;
 
 	// Disable multi-threaded WASM. The threaded path spawns a sub-Worker
 	// that imports 'worker_threads' (a Node.js module), which fails in
 	// Obsidian's blob-URL worker context. Single-threaded WASM avoids this.
 	env.backends.onnx.wasm.numThreads = 1;
-	env.backends.onnx.wasm.wasmPaths = runtimeBaseUrl;
+
+	if (assetBlobs) {
+		// Mobile path: serve everything from in-memory blob URLs.
+		const resolved = installBlobAssets(assetBlobs, modelBaseUrl, runtimeBaseUrl);
+		env.localModelPath = resolved.modelBaseUrl;
+		env.backends.onnx.wasm.wasmPaths = resolved.wasmPaths;
+	} else {
+		// Desktop path: resource URLs (app://) are fetchable directly.
+		env.localModelPath = modelBaseUrl;
+		env.backends.onnx.wasm.wasmPaths = runtimeBaseUrl;
+	}
 
 	const device = (await supportsWebGPU()) ? "webgpu" : "wasm";
 	self.postMessage({ type: "info", message: `Using device: "${device}"` });
@@ -219,9 +304,21 @@ async function processAudioChunk(buffer: Float32Array): Promise<void> {
 	dispatchForTranscriptionAndReset();
 }
 
-async function handleMessage(data: { type?: string; modelId?: string; buffer?: Float32Array }): Promise<void> {
+async function handleMessage(data: {
+	type?: string;
+	modelId?: string;
+	modelBaseUrl?: string;
+	runtimeBaseUrl?: string;
+	assetBlobs?: Record<string, ArrayBuffer>;
+	buffer?: Float32Array;
+}): Promise<void> {
 	if (data.type === "init") {
-		await loadModels(data.modelId, data.modelBaseUrl, data.runtimeBaseUrl);
+		await loadModels(
+			data.modelId!,
+			data.modelBaseUrl!,
+			data.runtimeBaseUrl!,
+			data.assetBlobs
+		);
 		return;
 	}
 

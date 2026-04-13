@@ -12,9 +12,9 @@ export type WorkerInMessage =
 	| {
 		type: "init";
 		modelId: string;
-		assetMode: "local" | "remote";
-		modelBaseUrl?: string;
-		runtimeBaseUrl?: string;
+		modelBaseUrl: string;
+		runtimeBaseUrl: string;
+		assetBlobs?: Record<string, ArrayBuffer>;
 	}
 	| { type: "flush" }
 	| { buffer: Float32Array };
@@ -55,6 +55,13 @@ export interface LocalAssetConfig {
 	modelBaseUrl: string;
 	runtimeBaseUrl: string;
 	platformKey: string;
+	/**
+	 * On mobile, file:// URLs are not fetchable from a Web Worker.
+	 * When present, this map provides all model and runtime files as
+	 * ArrayBuffers keyed by relative path so the worker can create
+	 * blob URLs in its own scope.
+	 */
+	assetBlobs?: Record<string, ArrayBuffer>;
 }
 
 export const DEFAULT_SETTINGS: VoiceNotesSettings = {

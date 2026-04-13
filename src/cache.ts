@@ -93,7 +93,7 @@ export class AssetCacheManager {
 			updatedAt: new Date().toISOString(),
 		});
 
-		return {
+		const config: LocalAssetConfig = {
 			assetMode: "local",
 			modelBaseUrl: this.getDirectoryResourceBase(
 				normalizePath(`${modelsCacheDir}/${CACHE_ROOT_PROBE_FILE}`),
@@ -105,6 +105,19 @@ export class AssetCacheManager {
 			),
 			platformKey,
 		};
+
+		// On mobile, file:// URLs are not fetchable from a blob-URL Web
+		// Worker.  Read every cached file on the main thread and hand the
+		// raw ArrayBuffers to the worker so it can create blob URLs in its
+		// own scope.
+		if (Platform.isMobileApp) {
+			onProgress?.("Preparing models for worker...");
+			config.assetBlobs = await this.readCachedAssetBlobs(
+				modelId, modelFiles, modelsCacheDir, runtimeCacheDir
+			);
+		}
+
+		return config;
 	}
 
 	private async ensureRepoFiles(
@@ -119,11 +132,12 @@ export class AssetCacheManager {
 				continue;
 			}
 
-			onProgress?.(`Caching ${repoId}/${file}`);
+			onProgress?.(`Downloading ${repoId}/${file}...`);
 			await this.downloadBinary(
 				this.getHuggingFaceResolveUrl(repoId, file),
 				relativePath
 			);
+			onProgress?.(`Cached ${repoId}/${file}`);
 		}
 	}
 
@@ -137,12 +151,43 @@ export class AssetCacheManager {
 				continue;
 			}
 
-			onProgress?.(`Caching runtime ${file.fileName}`);
+			onProgress?.(`Downloading runtime ${file.fileName}...`);
 			await this.downloadBinary(
 				file.url,
 				relativePath
 			);
+			onProgress?.(`Cached runtime ${file.fileName}`);
 		}
+	}
+
+	private async readCachedAssetBlobs(
+		modelId: string,
+		modelFiles: string[],
+		modelsCacheDir: string,
+		runtimeCacheDir: string
+	): Promise<Record<string, ArrayBuffer>> {
+		const adapter = this.plugin.app.vault.adapter;
+		const blobs: Record<string, ArrayBuffer> = {};
+
+		// Model files - keyed as "<repoId>/<file>" so the worker can
+		// reconstruct the same path that Transformers.js will request.
+		const repoFiles: Array<{ repo: string; file: string }> = [
+			...modelFiles.map((f) => ({ repo: modelId, file: f })),
+			...SILERO_FILES.map((f) => ({ repo: "onnx-community/silero-vad", file: f })),
+		];
+
+		for (const { repo, file } of repoFiles) {
+			const vaultPath = normalizePath(`${modelsCacheDir}/${repo}/${file}`);
+			blobs[`models/${repo}/${file}`] = await adapter.readBinary(vaultPath);
+		}
+
+		// Runtime files - keyed as "runtime/<fileName>"
+		for (const rtFile of this.getRuntimeFiles()) {
+			const vaultPath = normalizePath(`${runtimeCacheDir}/${rtFile.fileName}`);
+			blobs[`runtime/${rtFile.fileName}`] = await adapter.readBinary(vaultPath);
+		}
+
+		return blobs;
 	}
 
 	private async downloadBinary(url: string, relativePath: string): Promise<void> {
