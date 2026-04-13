@@ -5,7 +5,8 @@ export type WorkerOutMessage =
 	| { type: "flush-complete" }
 	| { type: "error"; error: string }
 	| { type: "download-progress"; file: string; progress: number; loaded: number; total: number }
-	| { type: "info"; message: string };
+	| { type: "info"; message: string }
+	| { type: "transcribe-file-complete" };
 
 /** Messages sent FROM the main thread TO the worker */
 export type WorkerInMessage =
@@ -17,6 +18,7 @@ export type WorkerInMessage =
 		assetBlobs?: Record<string, ArrayBuffer>;
 	}
 	| { type: "flush" }
+	| { type: "transcribe-file"; audio: Float32Array }
 	| { buffer: Float32Array };
 
 export type WorkerStatus = "loading" | "ready" | "recording_start" | "recording_end";

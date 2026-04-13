@@ -244,6 +244,7 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 			headerRow.createEl("th", { text: "File" });
 			headerRow.createEl("th", { text: "Size" });
 			headerRow.createEl("th", { text: "Status" });
+			headerRow.createEl("th", { text: "" });
 
 			const tbody = table.createEl("tbody");
 			let totalBytes = 0;
@@ -258,6 +259,30 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 				} else {
 					statusCell.createSpan({ text: "Missing", cls: "voice-notes-plus-cache-missing" });
 				}
+
+				const actionsCell = row.createEl("td");
+				const recacheBtn = actionsCell.createEl("button", {
+					text: file.exists ? "Re-download" : "Download",
+					cls: "voice-notes-plus-cache-recache-btn",
+				});
+				recacheBtn.addEventListener("click", async () => {
+					recacheBtn.disabled = true;
+					recacheBtn.textContent = "Working...";
+					try {
+						const cache = new AssetCacheManager(this.plugin);
+						await cache.recacheFile(file);
+						this.plugin.transcriptionManager?.destroy();
+						this.plugin.transcriptionManager = null;
+						new Notice(`Voice Notes Plus: ${file.label} re-cached.`);
+					} catch (e) {
+						new Notice(
+							`Voice Notes Plus: Failed - ${e instanceof Error ? e.message : String(e)}`
+						);
+					} finally {
+						this.renderCacheStatus(container);
+					}
+				});
+
 				totalBytes += file.bytes;
 			}
 

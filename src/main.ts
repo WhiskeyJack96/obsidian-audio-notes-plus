@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from "obsidian";
+import { App, FuzzySuggestModal, MarkdownView, Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from "obsidian";
 import { AssetCacheManager } from "./cache";
 import { VoiceNotesSettingTab } from "./settings";
 import { TranscriptionManager } from "./transcription/manager";
@@ -15,6 +15,31 @@ interface RecordingTarget {
 
 interface CommandManagerLike {
 	executeCommandById: (id: string) => unknown;
+}
+
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "webm", "flac", "m4a", "aac", "opus"]);
+
+class AudioFileSuggestModal extends FuzzySuggestModal<TFile> {
+	constructor(
+		app: App,
+		private audioFiles: TFile[],
+		private onChoose: (file: TFile) => void
+	) {
+		super(app);
+		this.setPlaceholder("Select an audio file to transcribe");
+	}
+
+	getItems(): TFile[] {
+		return this.audioFiles;
+	}
+
+	getItemText(file: TFile): string {
+		return file.path;
+	}
+
+	onChooseItem(file: TFile): void {
+		this.onChoose(file);
+	}
 }
 
 export default class VoiceNotesPlugin extends Plugin {
@@ -83,6 +108,14 @@ export default class VoiceNotesPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "transcribe-file",
+			name: "Transcribe audio file",
+			callback: () => {
+				this.pickAndTranscribeAudioFile();
+			},
+		});
+
 		// Status bar
 		this.statusBarEl = this.addStatusBarItem();
 	}
@@ -121,6 +154,81 @@ export default class VoiceNotesPlugin extends Plugin {
 			new Notice("Voice Notes Plus: Downloading transcription models. This may take a minute on first use.");
 			await this.transcriptionManager.initialize(assetConfig);
 		}
+	}
+
+	private pickAndTranscribeAudioFile(): void {
+		const audioFiles = this.app.vault.getFiles()
+			.filter((f) => AUDIO_EXTENSIONS.has(f.extension.toLowerCase()))
+			.sort((a, b) => b.stat.mtime - a.stat.mtime);
+
+		if (audioFiles.length === 0) {
+			new Notice("Voice Notes Plus: No audio files found in vault");
+			return;
+		}
+
+		new AudioFileSuggestModal(this.app, audioFiles, (file) => {
+			this.transcribeAudioFile(file);
+		}).open();
+	}
+
+	private async transcribeAudioFile(file: TFile): Promise<void> {
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!activeView?.file) {
+			new Notice("Voice Notes Plus: Open a note to insert the transcription");
+			return;
+		}
+
+		const insertTarget: RecordingTarget = {
+			filePath: activeView.file.path,
+			insertOffset: activeView.editor.posToOffset(activeView.editor.getCursor()),
+		};
+
+		try {
+			this.updateStatusBar("loading", "Decoding audio...");
+			const arrayBuffer = await this.app.vault.readBinary(file);
+			const pcm = await this.decodeAudioToPcm(arrayBuffer);
+
+			await this.ensureModelsLoaded();
+			this.updateStatusBar("recording_end", "Transcribing file...");
+
+			const transcript = await this.transcriptionManager!.transcribeFile(pcm);
+			await this.insertRecordingOutput(insertTarget, file.path, transcript);
+
+			if (this.settings.postTranscriptionCommandId) {
+				if (!this.executeCommand(this.settings.postTranscriptionCommandId)) {
+					new Notice("Voice Notes Plus: Post-transcription command failed to execute");
+				}
+			}
+
+			if (!this.settings.keepModelsLoaded) {
+				this.transcriptionManager?.destroy();
+				this.transcriptionManager = null;
+			}
+
+			this.updateStatusBar(null, "");
+			new Notice("Voice Notes Plus: Transcription complete");
+		} catch (e) {
+			this.updateStatusBar(null, "");
+			new Notice(
+				`Voice Notes Plus: Transcription failed - ${e instanceof Error ? e.message : String(e)}`
+			);
+		}
+	}
+
+	private async decodeAudioToPcm(arrayBuffer: ArrayBuffer): Promise<Float32Array> {
+		const audioCtx = new AudioContext();
+		const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+		await audioCtx.close();
+
+		const targetRate = 16000;
+		const targetLength = Math.ceil(audioBuffer.duration * targetRate);
+		const offlineCtx = new OfflineAudioContext(1, targetLength, targetRate);
+		const source = offlineCtx.createBufferSource();
+		source.buffer = audioBuffer;
+		source.connect(offlineCtx.destination);
+		source.start();
+		const rendered = await offlineCtx.startRendering();
+		return rendered.getChannelData(0);
 	}
 
 	private async toggleRecording(): Promise<void> {

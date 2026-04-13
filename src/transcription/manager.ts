@@ -13,6 +13,9 @@ export class TranscriptionManager {
 	private resolveFlush: (() => void) | null = null;
 	private flushTimeoutId: number | null = null;
 	private loadedModelId: string | null = null;
+	private fileTranscribeChunks: string[] | null = null;
+	private resolveFileTranscribe: ((transcript: string) => void) | null = null;
+	private fileTranscribeTimeoutId: number | null = null;
 	isReady = false;
 
 	constructor(private plugin: VoiceNotesPlugin) {}
@@ -74,13 +77,21 @@ export class TranscriptionManager {
 				this.callbacks?.onStatusChange(data.status as WorkerStatus, data.message);
 				break;
 			case "output":
-				this.callbacks?.onTranscription(data.message);
+				if (this.fileTranscribeChunks !== null) {
+					this.fileTranscribeChunks.push(data.message.trim());
+				} else {
+					this.callbacks?.onTranscription(data.message);
+				}
 				break;
 			case "flush-complete":
 				this.completeFlush();
 				break;
+			case "transcribe-file-complete":
+				this.completeFileTranscribe();
+				break;
 			case "error":
 				this.completeFlush();
+				this.completeFileTranscribe();
 				this.callbacks?.onError(data.error);
 				new Notice(`Voice Notes Plus: ${data.error}`);
 				break;
@@ -127,8 +138,30 @@ export class TranscriptionManager {
 		return this.flushPromise;
 	}
 
+	transcribeFile(audio: Float32Array): Promise<string> {
+		if (!this.worker || !this.isReady) {
+			return Promise.reject(new Error("Worker not initialized"));
+		}
+
+		this.fileTranscribeChunks = [];
+
+		return new Promise<string>((resolve) => {
+			this.resolveFileTranscribe = resolve;
+
+			this.fileTranscribeTimeoutId = window.setTimeout(() => {
+				this.completeFileTranscribe();
+			}, 120_000);
+
+			this.worker!.postMessage(
+				{ type: "transcribe-file", audio },
+				[audio.buffer]
+			);
+		});
+	}
+
 	destroy(): void {
 		this.completeFlush();
+		this.completeFileTranscribe();
 		this.worker?.terminate();
 		this.worker = null;
 		this.isReady = false;
@@ -138,6 +171,23 @@ export class TranscriptionManager {
 
 	private completeFlush(): void {
 		this.resolveFlush?.();
+	}
+
+	private completeFileTranscribe(): void {
+		if (!this.resolveFileTranscribe) return;
+
+		if (this.fileTranscribeTimeoutId !== null) {
+			window.clearTimeout(this.fileTranscribeTimeoutId);
+			this.fileTranscribeTimeoutId = null;
+		}
+
+		const transcript = this.fileTranscribeChunks
+			?.join(" ")
+			.replace(/\s+/g, " ")
+			.trim() ?? "";
+		this.resolveFileTranscribe(transcript);
+		this.fileTranscribeChunks = null;
+		this.resolveFileTranscribe = null;
 	}
 
 	private clearFlushTimeout(): void {

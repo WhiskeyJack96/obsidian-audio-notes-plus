@@ -141,6 +141,26 @@ export class AssetCacheManager {
 		}
 	}
 
+	/**
+	 * Delete and re-download a single cached file.
+	 */
+	async recacheFile(file: CachedFileInfo): Promise<void> {
+		const adapter = this.plugin.app.vault.adapter as typeof this.plugin.app.vault.adapter & {
+			remove: (normalizedPath: string) => Promise<void>;
+		};
+
+		if (file.exists) {
+			await adapter.remove(file.vaultPath);
+		}
+
+		const url = this.getDownloadUrl(file.label);
+		if (!url) {
+			throw new Error(`Cannot determine download URL for ${file.label}`);
+		}
+
+		await this.downloadBinary(url, file.vaultPath);
+	}
+
 	async ensureTranscriptionAssets(
 		modelSize: VoiceNotesSettings["modelSize"],
 		onProgress?: (message: string) => void
@@ -337,6 +357,22 @@ export class AssetCacheManager {
 
 	private getHuggingFaceResolveUrl(repoId: string, file: string): string {
 		return `${HUGGING_FACE_HOST}/${repoId}/resolve/${encodeURIComponent(HUGGING_FACE_REVISION)}/${file}`;
+	}
+
+	private getDownloadUrl(label: string): string | null {
+		if (label.startsWith("runtime/")) {
+			const fileName = label.slice("runtime/".length);
+			const rtFile = RUNTIME_FILES.find((f) => f.fileName === fileName);
+			return rtFile?.url ?? null;
+		}
+
+		// Model file: first two path segments are the HuggingFace repo ID,
+		// remaining segments form the file path within the repo.
+		const parts = label.split("/");
+		if (parts.length < 3) return null;
+		const repo = `${parts[0]}/${parts[1]}`;
+		const filePath = parts.slice(2).join("/");
+		return this.getHuggingFaceResolveUrl(repo, filePath);
 	}
 
 	private async ensureProbeFile(modelsCacheDir: string): Promise<void> {

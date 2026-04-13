@@ -258,6 +258,32 @@ function flushBuffer(): void {
 	prevBuffers = [];
 }
 
+async function transcribeFullAudio(audio: Float32Array): Promise<void> {
+	if (!workerReady) {
+		self.postMessage({ type: "error", error: "Models not loaded" });
+		self.postMessage({ type: "transcribe-file-complete" });
+		return;
+	}
+
+	const chunkSamples = MAX_BUFFER_DURATION * SAMPLE_RATE;
+
+	for (let offset = 0; offset < audio.length; offset += chunkSamples) {
+		const end = Math.min(offset + chunkSamples, audio.length);
+		const chunk = audio.subarray(offset, end);
+
+		// Skip chunks shorter than 0.5 seconds
+		if (chunk.length < SAMPLE_RATE * 0.5) continue;
+
+		await transcribe(chunk, {
+			start: (offset / SAMPLE_RATE) * 1000,
+			end: (end / SAMPLE_RATE) * 1000,
+			duration: ((end - offset) / SAMPLE_RATE) * 1000,
+		});
+	}
+
+	self.postMessage({ type: "transcribe-file-complete" });
+}
+
 async function processAudioChunk(buffer: Float32Array): Promise<void> {
 	if (!workerReady) return;
 
@@ -318,6 +344,7 @@ async function handleMessage(data: {
 	runtimeBaseUrl?: string;
 	assetBlobs?: Record<string, ArrayBuffer>;
 	buffer?: Float32Array;
+	audio?: Float32Array;
 }): Promise<void> {
 	if (data.type === "init") {
 		await loadModels(
@@ -333,6 +360,11 @@ async function handleMessage(data: {
 		flushBuffer();
 		await inferenceChain;
 		self.postMessage({ type: "flush-complete" });
+		return;
+	}
+
+	if (data.type === "transcribe-file") {
+		await transcribeFullAudio(data.audio!);
 		return;
 	}
 
