@@ -133,11 +133,14 @@ async function loadModels(
 	env.allowLocalModels = true;
 	env.allowRemoteModels = false;
 	env.useBrowserCache = false;
+	workerLog("loadModels: basic env set");
 
 	// Disable multi-threaded WASM. The threaded path spawns a sub-Worker
 	// that imports 'worker_threads' (a Node.js module), which fails in
 	// Obsidian's blob-URL worker context. Single-threaded WASM avoids this.
+	workerLog("loadModels: accessing env.backends.onnx.wasm");
 	env.backends.onnx.wasm.numThreads = 1;
+	workerLog("loadModels: numThreads set");
 
 	if (assetBlobs) {
 		workerLog(`loadModels: mobile path, ${Object.keys(assetBlobs).length} asset blobs`);
