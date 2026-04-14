@@ -99,14 +99,14 @@ function installBlobAssets(
 				: input.url;
 		const blobUrl = blobUrlMap.get(url);
 		if (blobUrl) {
+			workerLog(`fetch intercepted (blob): ${url.slice(0, 80)}`);
 			return originalFetch(blobUrl, init);
 		}
-		// Return a clean 404 for model-prefixed URLs that are not in the
-		// map (e.g. optional config files), so Transformers.js falls back
-		// gracefully instead of throwing a network error.
 		if (url.startsWith(MOBILE_MODEL_PREFIX)) {
+			workerLog(`fetch intercepted (404): ${url.slice(0, 80)}`);
 			return Promise.resolve(new Response(null, { status: 404 }));
 		}
+		workerLog(`fetch passthrough: ${url.slice(0, 120)}`);
 		return originalFetch(input, init);
 	}) as typeof self.fetch;
 
