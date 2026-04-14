@@ -1,4 +1,4 @@
-import { Platform, normalizePath, requestUrl } from "obsidian";
+import { Platform, normalizePath } from "obsidian";
 import { MODEL_IDS } from "./types";
 import type VoiceNotesPlugin from "./main";
 import type { LocalAssetConfig, VoiceNotesSettings } from "./types";
@@ -21,8 +21,6 @@ const HUGGING_FACE_HOST = "https://huggingface.co";
 const HUGGING_FACE_REVISION = "main";
 const CACHE_ROOT_PROBE_FILE = ".cache-root";
 const CACHE_MANIFEST_FILE = "cache-manifest.json";
-const MOBILE_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
-const DESKTOP_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
 
 const MOONSHINE_ROOT_FILES = [
 	"config.json",
@@ -289,64 +287,79 @@ export class AssetCacheManager {
 
 	private async downloadBinary(url: string, relativePath: string): Promise<void> {
 		await this.ensureDir(this.dirname(relativePath));
-		await this.downloadBinaryChunked(url, relativePath);
+		await this.downloadStreaming(url, relativePath);
 	}
 
-	private async downloadBinaryChunked(url: string, relativePath: string): Promise<void> {
+	private async downloadStreaming(url: string, relativePath: string): Promise<void> {
 		const adapter = this.plugin.app.vault.adapter as typeof this.plugin.app.vault.adapter & {
 			appendBinary?: (normalizedPath: string, data: ArrayBuffer) => Promise<void>;
 			remove: (normalizedPath: string) => Promise<void>;
 			rename: (normalizedPath: string, normalizedNewPath: string) => Promise<void>;
 		};
 		const tempPath = normalizePath(`${relativePath}.part`);
-		const chunkSize = this.getDownloadChunkSize();
-		let start = 0;
-		let totalBytes: number | null = null;
-		let chunkIndex = 0;
+		const startTime = Date.now();
+		const fileName = relativePath.split("/").pop() ?? relativePath;
 
 		if (await adapter.exists(tempPath)) {
 			await adapter.remove(tempPath);
 		}
 
-		while (totalBytes === null || start < totalBytes) {
-			const end = totalBytes === null
-				? start + chunkSize - 1
-				: Math.min(start + chunkSize - 1, totalBytes - 1);
-			const response = await requestUrl({
-				url,
-				headers: {
-					Range: `bytes=${start}-${end}`,
-				},
-				throw: false,
-			});
+		console.log(`[cache] downloading ${fileName} from ${url}`);
 
-			if (response.status !== 206 && response.status !== 200) {
-				throw new Error(`Failed to download ${url} (${response.status})`);
-			}
+		const response = await fetch(url);
+		if (!response.ok) {
+			throw new Error(
+				`[cache] failed to download ${fileName}: HTTP ${response.status} ${response.statusText}`
+			);
+		}
 
-			if (totalBytes === null) {
-				totalBytes = this.getTotalBytes(response.headers, response.arrayBuffer.byteLength);
-			}
+		const contentLength = Number(response.headers.get("content-length") ?? 0);
+		console.log(`[cache] ${fileName}: HTTP ${response.status}, content-length=${contentLength}`);
 
-			// Guard against zero-length responses that would loop forever.
-			if (response.arrayBuffer.byteLength === 0) {
-				throw new Error(`Server returned an empty response for ${url}`);
-			}
+		const body = response.body;
+		if (!body) {
+			throw new Error(`[cache] ${fileName}: response has no body (streaming not supported)`);
+		}
+
+		if (typeof adapter.appendBinary !== "function") {
+			throw new Error("Streaming cache downloads require Obsidian 1.12.3+");
+		}
+
+		const reader = body.getReader();
+		let bytesWritten = 0;
+		let chunkIndex = 0;
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+
+			const buf = value.buffer.byteLength === value.byteLength
+				? value.buffer
+				: value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
 
 			if (chunkIndex === 0) {
-				await adapter.writeBinary(tempPath, response.arrayBuffer);
-			} else if (typeof adapter.appendBinary === "function") {
-				await adapter.appendBinary(tempPath, response.arrayBuffer);
+				await adapter.writeBinary(tempPath, buf);
 			} else {
-				throw new Error("Chunked cache downloads require Obsidian 1.12.3+");
+				await adapter.appendBinary(tempPath, buf);
 			}
 
-			if (response.status === 200) {
-				break;
-			}
-
-			start += response.arrayBuffer.byteLength;
+			bytesWritten += value.byteLength;
 			chunkIndex += 1;
+		}
+
+		const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+		console.log(
+			`[cache] ${fileName}: wrote ${bytesWritten} bytes in ${chunkIndex} chunks (${elapsed}s)`
+		);
+
+		if (bytesWritten === 0) {
+			throw new Error(`[cache] ${fileName}: downloaded 0 bytes`);
+		}
+
+		if (contentLength > 0 && bytesWritten !== contentLength) {
+			console.warn(
+				`[cache] ${fileName}: size mismatch - expected ${contentLength}, got ${bytesWritten}`
+			);
 		}
 
 		if (await adapter.exists(relativePath)) {
@@ -475,38 +488,4 @@ export class AssetCacheManager {
 		}
 	}
 
-	private getDownloadChunkSize(): number {
-		return Platform.isMobileApp ? MOBILE_CHUNK_SIZE_BYTES : DESKTOP_CHUNK_SIZE_BYTES;
-	}
-
-	private getTotalBytes(headers: Record<string, string>, fallback: number): number {
-		const contentRange = this.getHeader(headers, "content-range");
-		if (contentRange) {
-			const totalPart = contentRange.split("/")[1];
-			const parsed = Number.parseInt(totalPart, 10);
-			if (Number.isFinite(parsed)) {
-				return parsed;
-			}
-		}
-
-		const contentLength = this.getHeader(headers, "content-length");
-		if (contentLength) {
-			const parsed = Number.parseInt(contentLength, 10);
-			if (Number.isFinite(parsed)) {
-				return parsed;
-			}
-		}
-
-		return fallback;
-	}
-
-	private getHeader(headers: Record<string, string>, name: string): string | null {
-		const expected = name.toLowerCase();
-		for (const [key, value] of Object.entries(headers)) {
-			if (key.toLowerCase() === expected) {
-				return value;
-			}
-		}
-		return null;
-	}
 }
