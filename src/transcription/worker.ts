@@ -179,6 +179,19 @@ async function loadModels(
 				workerLog(`loadModels: mjs blob URL import failed: ${e}`);
 			}
 		}
+
+		// Test if WASM compilation itself works on this device.
+		const wasmBin = env.backends.onnx.wasm.wasmBinary as ArrayBuffer | undefined;
+		if (wasmBin) {
+			workerLog(`loadModels: testing WebAssembly.compile (${wasmBin.byteLength} bytes)`);
+			try {
+				const t0 = Date.now();
+				await WebAssembly.compile(wasmBin);
+				workerLog(`loadModels: WebAssembly.compile succeeded in ${Date.now() - t0}ms`);
+			} catch (e) {
+				workerLog(`loadModels: WebAssembly.compile failed: ${e}`);
+			}
+		}
 	}
 
 	workerLog("loadModels: loading Silero VAD");
