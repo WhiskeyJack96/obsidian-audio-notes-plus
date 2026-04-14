@@ -58,11 +58,11 @@ const RUNTIME_FILES = [
 	},
 ] as const;
 
-// The bundled onnxruntime-web (via Transformers.js) always requests the
-// .jsep. variants regardless of device.  The non-jsep files are unused
-// but kept cached on desktop for forward compatibility.  On mobile we
-// only cache the jsep files to save bandwidth/storage.
-const MOBILE_RUNTIME_FILES = RUNTIME_FILES.filter((file) => file.fileName.includes(".jsep."));
+// On desktop, Transformers.js uses the .jsep. WASM variant (WebGPU
+// support).  On mobile, the jsep binary's init hangs in Android's
+// blob-URL Worker context, so we use the plain (non-jsep) WASM files.
+// Both sets are always cached so the vault works across platforms.
+const MOBILE_RUNTIME_FILES = RUNTIME_FILES;
 
 interface CacheManifest {
 	schemaVersion: number;

@@ -80,10 +80,10 @@ function installBlobAssets(
 		blobUrlMap.set(MOBILE_MODEL_PREFIX + relativePath, url);
 	}
 
-	// Build blob URLs for runtime files.  The bundled onnxruntime-web
-	// always requests the .jsep. variants.
-	const wasmBuf = assetBlobs["runtime/ort-wasm-simd-threaded.jsep.wasm"];
-	const mjsBuf = assetBlobs["runtime/ort-wasm-simd-threaded.jsep.mjs"];
+	// Use the non-jsep WASM runtime on mobile. The jsep variant's init
+	// hangs in Android's blob-URL Worker context due to WebGPU probing.
+	const wasmBuf = assetBlobs["runtime/ort-wasm-simd-threaded.wasm"];
+	const mjsBuf = assetBlobs["runtime/ort-wasm-simd-threaded.mjs"];
 	const mjsBlobUrl = mjsBuf
 		? URL.createObjectURL(new Blob([mjsBuf], { type: "application/javascript" }))
 		: "";
