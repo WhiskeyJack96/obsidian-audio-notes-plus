@@ -167,6 +167,20 @@ async function loadModels(
 	self.postMessage({ type: "status", status: "loading", message: "Loading models..." });
 
 	// Load Silero VAD
+	// Verify the mjs blob URL is importable before handing off to ONNX Runtime.
+	if (assetBlobs && env.backends.onnx.wasm.wasmPaths) {
+		const mjsUrl = (env.backends.onnx.wasm.wasmPaths as Record<string, string>).mjs;
+		if (mjsUrl) {
+			workerLog(`loadModels: testing mjs blob URL import`);
+			try {
+				await import(/* webpackIgnore: true */ mjsUrl);
+				workerLog("loadModels: mjs blob URL import succeeded");
+			} catch (e) {
+				workerLog(`loadModels: mjs blob URL import failed: ${e}`);
+			}
+		}
+	}
+
 	workerLog("loadModels: loading Silero VAD");
 	sileroVad = await AutoModel.from_pretrained("onnx-community/silero-vad", {
 		config: { model_type: "custom" },
