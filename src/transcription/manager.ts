@@ -16,6 +16,8 @@ export class TranscriptionManager {
 	private fileTranscribeChunks: string[] | null = null;
 	private resolveFileTranscribe: ((transcript: string) => void) | null = null;
 	private fileTranscribeTimeoutId: number | null = null;
+	private resolveInit: (() => void) | null = null;
+	private rejectInit: ((reason: Error) => void) | null = null;
 	isReady = false;
 
 	constructor(private plugin: VoiceNotesPlugin) {}
@@ -43,6 +45,9 @@ export class TranscriptionManager {
 			this.handleMessage(event.data);
 		};
 		this.worker.onerror = (event: ErrorEvent) => {
+			this.rejectInit?.(new Error(event.message));
+			this.resolveInit = null;
+			this.rejectInit = null;
 			this.callbacks?.onError(event.message);
 			new Notice(`Voice Notes Plus: Worker error - ${event.message}`);
 		};
@@ -65,7 +70,11 @@ export class TranscriptionManager {
 			}
 		}
 
-		this.worker.postMessage(initMsg, transfer);
+		return new Promise<void>((resolve, reject) => {
+			this.resolveInit = resolve;
+			this.rejectInit = reject;
+			this.worker!.postMessage(initMsg, transfer);
+		});
 	}
 
 	private handleMessage(data: WorkerOutMessage): void {
@@ -73,6 +82,9 @@ export class TranscriptionManager {
 			case "status":
 				if (data.status === "ready") {
 					this.isReady = true;
+					this.resolveInit?.();
+					this.resolveInit = null;
+					this.rejectInit = null;
 				}
 				this.callbacks?.onStatusChange(data.status as WorkerStatus, data.message);
 				break;
@@ -90,6 +102,11 @@ export class TranscriptionManager {
 				this.completeFileTranscribe();
 				break;
 			case "error":
+				if (this.rejectInit) {
+					this.rejectInit(new Error(data.error));
+					this.resolveInit = null;
+					this.rejectInit = null;
+				}
 				this.completeFlush();
 				this.completeFileTranscribe();
 				this.callbacks?.onError(data.error);
@@ -160,6 +177,9 @@ export class TranscriptionManager {
 	}
 
 	destroy(): void {
+		this.rejectInit?.(new Error("Worker destroyed"));
+		this.resolveInit = null;
+		this.rejectInit = null;
 		this.completeFlush();
 		this.completeFileTranscribe();
 		this.worker?.terminate();
