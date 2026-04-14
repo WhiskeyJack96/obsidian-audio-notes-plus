@@ -1,4 +1,4 @@
-import { AbstractInputSuggest, App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { AbstractInputSuggest, App, Notice, PluginSettingTab, Setting, TFolder } from "obsidian";
 import { AssetCacheManager } from "./cache";
 import type { CachedFileInfo } from "./cache";
 import type VoiceNotesPlugin from "./main";
@@ -39,6 +39,44 @@ class CommandInputSuggest extends AbstractInputSuggest<CommandSuggestion> {
 	renderSuggestion(command: CommandSuggestion, el: HTMLElement): void {
 		el.createDiv({ text: command.name });
 		el.createEl("small", { text: command.id });
+	}
+}
+
+class FolderInputSuggest extends AbstractInputSuggest<TFolder> {
+	constructor(app: App, textInputEl: HTMLInputElement) {
+		super(app, textInputEl);
+	}
+
+	protected getSuggestions(query: string): TFolder[] {
+		const normalizedQuery = query.trim().toLowerCase();
+		const folders: TFolder[] = [];
+		const root = this.app.vault.getRoot();
+		this.collectFolders(root, folders);
+		return folders
+			.filter((folder) => {
+				if (!normalizedQuery) return true;
+				return folder.path.toLowerCase().includes(normalizedQuery);
+			})
+			.slice(0, 50);
+	}
+
+	renderSuggestion(folder: TFolder, el: HTMLElement): void {
+		el.createDiv({ text: folder.path || "/" });
+	}
+
+	selectSuggestion(folder: TFolder): void {
+		(this as unknown as { inputEl: HTMLInputElement }).inputEl.value = folder.path;
+		(this as unknown as { inputEl: HTMLInputElement }).inputEl.dispatchEvent(new Event("change"));
+		this.close();
+	}
+
+	private collectFolders(folder: TFolder, result: TFolder[]): void {
+		for (const child of folder.children) {
+			if (child instanceof TFolder) {
+				result.push(child);
+				this.collectFolders(child, result);
+			}
+		}
 	}
 }
 
@@ -101,15 +139,22 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Audio folder")
 			.setDesc("Vault folder where recorded audio files are saved.")
-			.addText((text) =>
+			.addText((text) => {
 				text
 					.setPlaceholder(DEFAULT_SETTINGS.audioFolder)
 					.setValue(this.plugin.settings.audioFolder)
 					.onChange(async (value) => {
 						this.plugin.settings.audioFolder = value || DEFAULT_SETTINGS.audioFolder;
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+
+				const suggest = new FolderInputSuggest(this.app, text.inputEl);
+				suggest.onSelect(async (folder) => {
+					text.setValue(folder.path);
+					this.plugin.settings.audioFolder = folder.path || DEFAULT_SETTINGS.audioFolder;
+					await this.plugin.saveSettings();
+				});
+			});
 
 		// -- Voice activity detection section --
 		new Setting(containerEl).setName("Voice activity detection").setHeading();

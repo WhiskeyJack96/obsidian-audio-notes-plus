@@ -113,7 +113,8 @@ export class TranscriptionManager {
 				new Notice(`Voice Notes Plus: ${data.error}`);
 				break;
 			case "info":
-				// Informational messages (device type, etc.)
+				console.log(`[worker] ${data.message}`);
+				new Notice(`[worker] ${data.message}`);
 				break;
 			case "download-progress":
 				// Could update a progress indicator here

@@ -119,12 +119,17 @@ function installBlobAssets(
 	};
 }
 
+function workerLog(message: string): void {
+	self.postMessage({ type: "info", message });
+}
+
 async function loadModels(
 	modelId: string,
 	modelBaseUrl: string,
 	runtimeBaseUrl: string,
 	assetBlobs?: Record<string, ArrayBuffer>
 ): Promise<void> {
+	workerLog("loadModels: configuring env");
 	env.allowLocalModels = true;
 	env.allowRemoteModels = false;
 	env.useBrowserCache = false;
@@ -135,25 +140,31 @@ async function loadModels(
 	env.backends.onnx.wasm.numThreads = 1;
 
 	if (assetBlobs) {
-		// Mobile path: serve everything from in-memory blob URLs.
+		workerLog(`loadModels: mobile path, ${Object.keys(assetBlobs).length} asset blobs`);
+		for (const [key, buf] of Object.entries(assetBlobs)) {
+			workerLog(`  blob: ${key} (${buf.byteLength} bytes)`);
+		}
 		const resolved = installBlobAssets(assetBlobs);
 		env.localModelPath = resolved.modelBaseUrl;
 		env.backends.onnx.wasm.wasmPaths = resolved.wasmPaths;
-		// Pass the WASM binary directly so Emscripten skips fetching it.
+		workerLog(`loadModels: wasmPaths.mjs = ${resolved.wasmPaths.mjs ? "set" : "MISSING"}`);
+		workerLog(`loadModels: wasmBinary = ${resolved.wasmBinary ? `${resolved.wasmBinary.byteLength} bytes` : "MISSING"}`);
 		if (resolved.wasmBinary) {
 			env.backends.onnx.wasm.wasmBinary = resolved.wasmBinary;
 		}
 	} else {
-		// Desktop path: resource URLs (app://) are fetchable directly.
+		workerLog("loadModels: desktop path");
 		env.localModelPath = modelBaseUrl;
 		env.backends.onnx.wasm.wasmPaths = runtimeBaseUrl;
 	}
 
+	workerLog("loadModels: detecting device");
 	const device = (await supportsWebGPU()) ? "webgpu" : "wasm";
-	self.postMessage({ type: "info", message: `Using device: "${device}"` });
+	workerLog(`loadModels: device = "${device}"`);
 	self.postMessage({ type: "status", status: "loading", message: "Loading models..." });
 
 	// Load Silero VAD
+	workerLog("loadModels: loading Silero VAD");
 	sileroVad = await AutoModel.from_pretrained("onnx-community/silero-vad", {
 		config: { model_type: "custom" },
 		dtype: "fp32",
@@ -162,12 +173,14 @@ async function loadModels(
 		self.postMessage({ type: "error", error: `Failed to load VAD model: ${error.message}` });
 		throw error;
 	});
+	workerLog("loadModels: Silero VAD loaded");
 
 	// Load Moonshine transcriber with device-specific quantization
 	const dtypeConfig = device === "webgpu"
 		? { encoder_model: "fp32", decoder_model_merged: "q4" }
 		: { encoder_model: "fp32", decoder_model_merged: "q8" };
 
+	workerLog(`loadModels: loading Moonshine (${modelId})`);
 	transcriber = await pipeline("automatic-speech-recognition", modelId, {
 		device,
 		dtype: dtypeConfig as Record<string, string>,
@@ -176,9 +189,12 @@ async function loadModels(
 		self.postMessage({ type: "error", error: `Failed to load transcription model: ${error.message}` });
 		throw error;
 	});
+	workerLog("loadModels: Moonshine loaded");
 
 	// Warm-up inference to compile shaders / verify WASM works
+	workerLog("loadModels: running warmup inference");
 	await transcriber(new Float32Array(SAMPLE_RATE));
+	workerLog("loadModels: warmup complete");
 
 	workerReady = true;
 	self.postMessage({ type: "status", status: "ready", message: "Ready" });

@@ -116,6 +116,14 @@ export default class VoiceNotesPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "transcribe-embeds",
+			name: "Transcribe all audio embeds in current file",
+			editorCallback: () => {
+				this.transcribeAllEmbedsInCurrentFile();
+			},
+		});
+
 		// Status bar
 		this.statusBarEl = this.addStatusBarItem();
 	}
@@ -157,6 +165,24 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private pickAndTranscribeAudioFile(): void {
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const selection = activeView?.editor.getSelection().trim() ?? "";
+
+		if (selection && activeView?.file) {
+			// Strip link/embed syntax: ![[path]] or [[path]] → path
+			const linkMatch = selection.match(/^!?\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/);
+			const linkPath = linkMatch ? linkMatch[1] : selection;
+
+			const resolved = this.app.metadataCache.getFirstLinkpathDest(linkPath, activeView.file.path);
+			if (resolved instanceof TFile && AUDIO_EXTENSIONS.has(resolved.extension.toLowerCase())) {
+				// Insert after the end of the selection (the embed/link)
+				const selEnd = activeView.editor.getCursor("to");
+				const insertOffset = activeView.editor.posToOffset(selEnd);
+				this.transcribeAudioFile(resolved, insertOffset);
+				return;
+			}
+		}
+
 		const audioFiles = this.app.vault.getFiles()
 			.filter((f) => AUDIO_EXTENSIONS.has(f.extension.toLowerCase()))
 			.sort((a, b) => b.stat.mtime - a.stat.mtime);
@@ -171,17 +197,15 @@ export default class VoiceNotesPlugin extends Plugin {
 		}).open();
 	}
 
-	private async transcribeAudioFile(file: TFile): Promise<void> {
+	private async transcribeAudioFile(file: TFile, appendAfterOffset?: number): Promise<void> {
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView?.file) {
 			new Notice("Voice Notes Plus: Open a note to insert the transcription");
 			return;
 		}
 
-		const insertTarget: RecordingTarget = {
-			filePath: activeView.file.path,
-			insertOffset: activeView.editor.posToOffset(activeView.editor.getCursor()),
-		};
+		const insertOffset = appendAfterOffset
+			?? activeView.editor.posToOffset(activeView.editor.getCursor());
 
 		try {
 			this.updateStatusBar("loading", "Decoding audio...");
@@ -192,7 +216,21 @@ export default class VoiceNotesPlugin extends Plugin {
 			this.updateStatusBar("recording_end", "Transcribing file...");
 
 			const transcript = await this.transcriptionManager!.transcribeFile(pcm);
-			await this.insertRecordingOutput(insertTarget, file.path, transcript);
+
+			if (appendAfterOffset != null) {
+				// Appending after an existing embed/link — only insert the transcription line
+				if (transcript.trim()) {
+					const editor = activeView.editor;
+					const pos = editor.offsetToPos(insertOffset);
+					editor.replaceRange(`\n#transcription ${transcript.trim()}`, pos);
+				}
+			} else {
+				const insertTarget: RecordingTarget = {
+					filePath: activeView.file!.path,
+					insertOffset,
+				};
+				await this.insertRecordingOutput(insertTarget, file.path, transcript);
+			}
 
 			if (this.settings.postTranscriptionCommandId) {
 				if (!this.executeCommand(this.settings.postTranscriptionCommandId)) {
@@ -212,6 +250,87 @@ export default class VoiceNotesPlugin extends Plugin {
 			new Notice(
 				`Voice Notes Plus: Transcription failed - ${e instanceof Error ? e.message : String(e)}`
 			);
+		}
+	}
+
+	private async transcribeAllEmbedsInCurrentFile(): Promise<void> {
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!activeView?.file) {
+			new Notice("Voice Notes Plus: Open a note first");
+			return;
+		}
+
+		const cache = this.app.metadataCache.getFileCache(activeView.file);
+		const audioEmbeds = (cache?.embeds ?? []).filter((embed) => {
+			const ext = embed.link.split(".").pop()?.toLowerCase() ?? "";
+			return AUDIO_EXTENSIONS.has(ext);
+		});
+
+		if (audioEmbeds.length === 0) {
+			new Notice("Voice Notes Plus: No audio embeds found in current file");
+			return;
+		}
+
+		try {
+			await this.ensureModelsLoaded();
+		} catch (e) {
+			new Notice(`Voice Notes Plus: Failed to initialize - ${e instanceof Error ? e.message : String(e)}`);
+			return;
+		}
+
+		let transcribed = 0;
+		let skipped = 0;
+
+		// Process in reverse order so earlier offsets remain valid after insertions
+		const sortedEmbeds = [...audioEmbeds].sort(
+			(a, b) => b.position.end.offset - a.position.end.offset
+		);
+
+		for (const embed of sortedEmbeds) {
+			const editor = activeView.editor;
+			const currentContent = editor.getValue();
+
+			// Skip if already transcribed
+			const afterEmbed = currentContent.slice(embed.position.end.offset);
+			if (afterEmbed.match(/^\n#transcription /)) {
+				skipped++;
+				continue;
+			}
+
+			const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, activeView.file!.path);
+			if (!(file instanceof TFile)) {
+				new Notice(`Voice Notes Plus: Audio file not found: ${embed.link}`);
+				skipped++;
+				continue;
+			}
+
+			this.updateStatusBar("recording_end", `Transcribing ${transcribed + 1}/${audioEmbeds.length}...`);
+
+			const arrayBuffer = await this.app.vault.readBinary(file);
+			const pcm = await this.decodeAudioToPcm(arrayBuffer);
+			const transcript = await this.transcriptionManager!.transcribeFile(pcm);
+
+			if (transcript.trim()) {
+				const insertPos = editor.offsetToPos(embed.position.end.offset);
+				editor.replaceRange(`\n#transcription ${transcript.trim()}`, insertPos);
+				transcribed++;
+			} else {
+				skipped++;
+			}
+		}
+
+		if (!this.settings.keepModelsLoaded) {
+			this.transcriptionManager?.destroy();
+			this.transcriptionManager = null;
+		}
+
+		this.updateStatusBar(null, "");
+		new Notice(`Voice Notes Plus: Transcribed ${transcribed} embed${transcribed !== 1 ? "s" : ""}${skipped > 0 ? `, ${skipped} skipped` : ""}`);
+
+		if (transcribed > 0 && this.settings.postTranscriptionCommandId) {
+			if (!this.executeCommand(this.settings.postTranscriptionCommandId)) {
+				new Notice("Voice Notes Plus: Post-transcription command failed to execute");
+			}
 		}
 	}
 
@@ -362,14 +481,17 @@ export default class VoiceNotesPlugin extends Plugin {
 		return filePath;
 	}
 
+	private formatTranscriptionBlock(audioFilePath: string, transcript: string): string {
+		if (!transcript) return `![[${audioFilePath}]]`;
+		return `![[${audioFilePath}]]\n#transcription ${transcript}`;
+	}
+
 	private async insertRecordingOutput(
 		target: RecordingTarget,
 		audioFilePath: string,
 		transcript: string
 	): Promise<void> {
-		const block = transcript
-			? `![[${audioFilePath}]]\n\n${transcript}`
-			: `![[${audioFilePath}]]`;
+		const block = this.formatTranscriptionBlock(audioFilePath, transcript);
 
 		const openView = this.findOpenMarkdownView(target.filePath);
 		if (openView?.file?.path === target.filePath) {
