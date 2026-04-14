@@ -162,8 +162,10 @@ async function loadModels(
 	}
 
 	workerLog("loadModels: detecting device");
-	const device = (await supportsWebGPU()) ? "webgpu" : "wasm";
-	workerLog(`loadModels: device = "${device}"`);
+	// On mobile, WebGPU may be reported as supported but using it for
+	// inference inside a blob-URL Worker hangs on Android.  Force WASM.
+	const device = assetBlobs ? "wasm" : (await supportsWebGPU()) ? "webgpu" : "wasm";
+	workerLog(`loadModels: device = "${device}"${assetBlobs ? " (forced wasm for mobile)" : ""}`);
 	self.postMessage({ type: "status", status: "loading", message: "Loading models..." });
 
 	// Load Silero VAD
