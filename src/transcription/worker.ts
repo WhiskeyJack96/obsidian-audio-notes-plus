@@ -275,6 +275,8 @@ function flushBuffer(): void {
 }
 
 async function transcribeFullAudio(audio: Float32Array): Promise<void> {
+	workerLog(`transcribeFile: received ${audio.length} samples (${(audio.length / SAMPLE_RATE).toFixed(1)}s)`);
+
 	if (!workerReady) {
 		self.postMessage({ type: "error", error: "Models not loaded" });
 		self.postMessage({ type: "transcribe-file-complete" });
@@ -282,14 +284,22 @@ async function transcribeFullAudio(audio: Float32Array): Promise<void> {
 	}
 
 	const chunkSamples = MAX_BUFFER_DURATION * SAMPLE_RATE;
+	const totalChunks = Math.ceil(audio.length / chunkSamples);
+	workerLog(`transcribeFile: splitting into ${totalChunks} chunks (${chunkSamples} samples each)`);
 
+	let chunksProcessed = 0;
 	for (let offset = 0; offset < audio.length; offset += chunkSamples) {
 		const end = Math.min(offset + chunkSamples, audio.length);
 		const chunk = audio.subarray(offset, end);
 
 		// Skip chunks shorter than 0.5 seconds
-		if (chunk.length < SAMPLE_RATE * 0.5) continue;
+		if (chunk.length < SAMPLE_RATE * 0.5) {
+			workerLog(`transcribeFile: skipping short chunk (${chunk.length} samples)`);
+			continue;
+		}
 
+		chunksProcessed++;
+		workerLog(`transcribeFile: processing chunk ${chunksProcessed}/${totalChunks}`);
 		await transcribe(chunk, {
 			start: (offset / SAMPLE_RATE) * 1000,
 			end: (end / SAMPLE_RATE) * 1000,
@@ -297,6 +307,7 @@ async function transcribeFullAudio(audio: Float32Array): Promise<void> {
 		});
 	}
 
+	workerLog(`transcribeFile: done, processed ${chunksProcessed} chunks`);
 	self.postMessage({ type: "transcribe-file-complete" });
 }
 

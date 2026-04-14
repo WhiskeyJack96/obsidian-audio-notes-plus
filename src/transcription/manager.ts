@@ -114,7 +114,7 @@ export class TranscriptionManager {
 				break;
 			case "info":
 				console.log(`[worker] ${data.message}`);
-				new Notice(`[worker] ${data.message}`);
+				new Notice(`[worker] ${data.message}`, 0);
 				break;
 			case "download-progress":
 				// Could update a progress indicator here
@@ -161,12 +161,16 @@ export class TranscriptionManager {
 			return Promise.reject(new Error("Worker not initialized"));
 		}
 
+		console.log(`[manager] transcribeFile: sending ${audio.length} samples`);
+		new Notice(`[manager] sending ${audio.length} samples (${(audio.length / 16000).toFixed(1)}s)`, 0);
 		this.fileTranscribeChunks = [];
 
 		return new Promise<string>((resolve) => {
 			this.resolveFileTranscribe = resolve;
 
 			this.fileTranscribeTimeoutId = window.setTimeout(() => {
+				console.log("[manager] transcribeFile: timed out after 120s");
+				new Notice("[manager] transcribeFile timed out", 0);
 				this.completeFileTranscribe();
 			}, 120_000);
 
@@ -202,10 +206,10 @@ export class TranscriptionManager {
 			this.fileTranscribeTimeoutId = null;
 		}
 
-		const transcript = this.fileTranscribeChunks
-			?.join(" ")
-			.replace(/\s+/g, " ")
-			.trim() ?? "";
+		const chunks = this.fileTranscribeChunks ?? [];
+		const transcript = chunks.join(" ").replace(/\s+/g, " ").trim();
+		console.log(`[manager] completeFileTranscribe: ${chunks.length} chunks, ${transcript.length} chars`);
+		new Notice(`[manager] complete: ${chunks.length} chunks, ${transcript.length} chars`, 0);
 		this.resolveFileTranscribe(transcript);
 		this.fileTranscribeChunks = null;
 		this.resolveFileTranscribe = null;
