@@ -14,9 +14,9 @@ export interface CachedFileInfo {
 	bytes: number;
 }
 
-const CACHE_SCHEMA_VERSION = 1;
-const TRANSFORMERS_VERSION = "3.7.1";
-const ORT_VERSION = "1.22.0-dev.20250409-89f8206ba4";
+const CACHE_SCHEMA_VERSION = 2;
+const TRANSFORMERS_VERSION = "4.0.0";
+const ORT_VERSION = "1.25.0-dev.20260327-722743c0e2";
 const HUGGING_FACE_HOST = "https://huggingface.co";
 const HUGGING_FACE_REVISION = "main";
 const CACHE_ROOT_PROBE_FILE = ".cache-root";
@@ -45,23 +45,24 @@ const RUNTIME_FILES = [
 		url: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/ort-wasm-simd-threaded.wasm`,
 	},
 	{
-		fileName: "ort-wasm-simd-threaded.jsep.wasm",
-		url: `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}/dist/ort-wasm-simd-threaded.jsep.wasm`,
+		fileName: "ort-wasm-simd-threaded.asyncify.wasm",
+		url: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/ort-wasm-simd-threaded.asyncify.wasm`,
 	},
 	{
 		fileName: "ort-wasm-simd-threaded.mjs",
 		url: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/ort-wasm-simd-threaded.mjs`,
 	},
 	{
-		fileName: "ort-wasm-simd-threaded.jsep.mjs",
-		url: `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}/dist/ort-wasm-simd-threaded.jsep.mjs`,
+		fileName: "ort-wasm-simd-threaded.asyncify.mjs",
+		url: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/ort-wasm-simd-threaded.asyncify.mjs`,
 	},
 ] as const;
 
-// On desktop, Transformers.js uses the .jsep. WASM variant (WebGPU
-// support).  On mobile, the jsep binary's init hangs in Android's
-// blob-URL Worker context, so we use the plain (non-jsep) WASM files.
-// Both sets are always cached so the vault works across platforms.
+// Transformers.js 4.x picks the .asyncify. WASM variant on every
+// non-Safari browser (including Electron/Obsidian desktop); Safari and
+// mobile fall back to the plain files.  On Android, the plain binary
+// is loaded via a blob URL from inside the worker (see worker.ts), so
+// caching both sets keeps every platform working from a single layout.
 const MOBILE_RUNTIME_FILES = RUNTIME_FILES;
 
 interface CacheManifest {

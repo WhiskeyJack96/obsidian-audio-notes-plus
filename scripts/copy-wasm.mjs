@@ -32,10 +32,10 @@ try {
 const files = [
 	// WASM binaries
 	"ort-wasm-simd-threaded.wasm",
-	"ort-wasm-simd-threaded.jsep.wasm",
+	"ort-wasm-simd-threaded.asyncify.wasm",
 	// JS bootstrappers (dynamically imported by ONNX Runtime at init)
 	"ort-wasm-simd-threaded.mjs",
-	"ort-wasm-simd-threaded.jsep.mjs",
+	"ort-wasm-simd-threaded.asyncify.mjs",
 ];
 
 let copied = 0;

@@ -17,7 +17,7 @@
   "author": "Jacob Mikesell",
   "license": "MIT",
   "dependencies": {
-    "@huggingface/transformers": "3.7.1"
+    "@huggingface/transformers": "4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.17.9",
