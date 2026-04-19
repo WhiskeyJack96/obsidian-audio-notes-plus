@@ -11,6 +11,13 @@ if you want to view the source, please visit the github repository of this plugi
 
 const isProd = process.argv[2] === "production";
 
+// Flip to `true` (or set DEBUG_LOGS=1 in the env) to re-enable the
+// verbose [worker]/[cache]/[manager] console logs and Notice toasts
+// used for diagnosing model-loading issues.  Off by default so the
+// shipped plugin stays quiet; esbuild dead-code-eliminates the
+// guarded branches when this is the constant `false`.
+const debugLogs = process.env.DEBUG_LOGS === "1" || process.env.DEBUG_LOGS === "true";
+
 const sharedConfig = {
 	bundle: true,
 	logLevel: "info",
@@ -42,6 +49,7 @@ await esbuild.build({
 	},
 	define: {
 		"process.env.NODE_ENV": isProd ? '"production"' : '"development"',
+		DEBUG_LOGS: String(debugLogs),
 	},
 });
 
@@ -76,6 +84,7 @@ const mainContext = await esbuild.context({
 	outfile: "main.js",
 	define: {
 		WORKER_BASE64: JSON.stringify(workerBase64),
+		DEBUG_LOGS: String(debugLogs),
 	},
 });
 

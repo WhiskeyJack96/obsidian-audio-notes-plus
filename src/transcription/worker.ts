@@ -130,7 +130,13 @@ function installBlobAssets(
 	};
 }
 
+// Injected at build time by esbuild. Off in shipped builds; flip on
+// via `DEBUG_LOGS=1 npm run build` (or edit esbuild.config.mjs) to
+// stream worker diagnostics back to the main thread.
+declare const DEBUG_LOGS: boolean;
+
 function workerLog(message: string): void {
+	if (!DEBUG_LOGS) return;
 	self.postMessage({ type: "info", message });
 }
 

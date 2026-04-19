@@ -3,6 +3,9 @@ import { MODEL_IDS } from "./types";
 import type VoiceNotesPlugin from "./main";
 import type { LocalAssetConfig, VoiceNotesSettings } from "./types";
 
+// Injected at build time by esbuild. Off in shipped builds.
+declare const DEBUG_LOGS: boolean;
+
 export interface CachedFileInfo {
 	/** Display label (e.g. "onnx-community/moonshine-base-ONNX/config.json") */
 	label: string;
@@ -302,7 +305,7 @@ export class AssetCacheManager {
 			await adapter.remove(tempPath);
 		}
 
-		console.log(`[cache] downloading ${fileName} from ${url}`);
+		if (DEBUG_LOGS) console.log(`[cache] downloading ${fileName} from ${url}`);
 
 		const response = await fetch(url);
 		if (!response.ok) {
@@ -312,7 +315,7 @@ export class AssetCacheManager {
 		}
 
 		const contentLength = Number(response.headers.get("content-length") ?? 0);
-		console.log(`[cache] ${fileName}: HTTP ${response.status}, content-length=${contentLength}`);
+		if (DEBUG_LOGS) console.log(`[cache] ${fileName}: HTTP ${response.status}, content-length=${contentLength}`);
 
 		const body = response.body;
 		if (!body) {
@@ -345,16 +348,18 @@ export class AssetCacheManager {
 			chunkIndex += 1;
 		}
 
-		const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-		console.log(
-			`[cache] ${fileName}: wrote ${bytesWritten} bytes in ${chunkIndex} chunks (${elapsed}s)`
-		);
+		if (DEBUG_LOGS) {
+			const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+			console.log(
+				`[cache] ${fileName}: wrote ${bytesWritten} bytes in ${chunkIndex} chunks (${elapsed}s)`
+			);
+		}
 
 		if (bytesWritten === 0) {
 			throw new Error(`[cache] ${fileName}: downloaded 0 bytes`);
 		}
 
-		if (contentLength > 0 && bytesWritten !== contentLength) {
+		if (contentLength > 0 && bytesWritten !== contentLength && DEBUG_LOGS) {
 			console.warn(
 				`[cache] ${fileName}: size mismatch - expected ${contentLength}, got ${bytesWritten}`
 			);
