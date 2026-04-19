@@ -45,8 +45,14 @@ async function supportsWebGPU(): Promise<boolean> {
 }
 
 // Synthetic URL prefix used on mobile when real file:// URLs are not
-// fetchable from within this blob-URL worker.
-const MOBILE_MODEL_PREFIX = "http://voice-notes-plus.local/models/";
+// fetchable from within this blob-URL worker.  We deliberately avoid
+// http:/https: because Transformers.js 4.x's model registry treats
+// those as remote URLs and then refuses to probe them when
+// env.allowRemoteModels=false, which causes the tokenizer/processor
+// metadata lookup to report the files as missing.  A custom scheme is
+// still parseable by `new URL()` but bypasses that branch so the local
+// resolution path runs and our fetch interceptor sees the request.
+const MOBILE_MODEL_PREFIX = "voicenotes-local://models/";
 
 /**
  * On mobile, Obsidian's getResourcePath returns file:// URLs which
