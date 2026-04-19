@@ -89,9 +89,12 @@ function installBlobAssets(
 		: "";
 
 	// Override fetch so Transformers.js and Emscripten resolve from blob
-	// URLs instead of trying to hit the filesystem.
+	// URLs instead of trying to hit the filesystem.  Transformers.js 4.x
+	// captures a bound reference to globalThis.fetch at import time and
+	// routes every request through env.fetch, so overriding self.fetch
+	// alone is not enough; we install the same interceptor on env.fetch.
 	const originalFetch = self.fetch.bind(self);
-	self.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+	const interceptFetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
 		const url = typeof input === "string"
 			? input
 			: input instanceof URL
@@ -109,6 +112,8 @@ function installBlobAssets(
 		workerLog(`fetch passthrough: ${url.slice(0, 120)}`);
 		return originalFetch(input, init);
 	}) as typeof self.fetch;
+	self.fetch = interceptFetch;
+	env.fetch = interceptFetch;
 
 	return {
 		modelBaseUrl: MOBILE_MODEL_PREFIX,
