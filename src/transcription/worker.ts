@@ -150,7 +150,9 @@ async function loadModels(
 	if (assetBlobs) {
 		workerLog(`loadModels: mobile path, ${Object.keys(assetBlobs).length} asset blobs`);
 		for (const [key, buf] of Object.entries(assetBlobs)) {
-			workerLog(`  blob: ${key} (${buf.byteLength} bytes)`);
+			const head = new Uint8Array(buf, 0, Math.min(8, buf.byteLength));
+			const hex = Array.from(head).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+			workerLog(`  blob: ${key} (${buf.byteLength} bytes, head=${hex})`);
 		}
 		const resolved = installBlobAssets(assetBlobs);
 		env.localModelPath = resolved.modelBaseUrl;
@@ -212,10 +214,11 @@ async function loadModels(
 	});
 	workerLog("loadModels: Silero VAD loaded");
 
-	// Load Moonshine transcriber with device-specific quantization
-	const dtypeConfig = device === "webgpu"
-		? { encoder_model: "fp32", decoder_model_merged: "q4" }
-		: { encoder_model: "fp32", decoder_model_merged: "q8" };
+	// Load Moonshine transcriber. We always use q4 for the decoder
+	// (block-wise 4-bit via MatMulNBits) because onnxruntime-web supports
+	// it on both WebGPU and WASM, the file is smaller, and the q8 variant
+	// triggers ORT 1.25's qdq optimizer bug on its embed_tokens node.
+	const dtypeConfig = { encoder_model: "fp32", decoder_model_merged: "q4" };
 
 	workerLog(`loadModels: loading Moonshine (${modelId})`);
 	transcriber = await pipeline("automatic-speech-recognition", modelId, {

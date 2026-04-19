@@ -32,8 +32,7 @@ const MOONSHINE_ROOT_FILES = [
 ];
 
 const MOONSHINE_ENCODER_FILE = "onnx/encoder_model.onnx";
-const MOONSHINE_DECODER_Q4_FILE = "onnx/decoder_model_merged_q4.onnx";
-const MOONSHINE_DECODER_Q8_FILE = "onnx/decoder_model_merged_quantized.onnx";
+const MOONSHINE_DECODER_FILE = "onnx/decoder_model_merged_q4.onnx";
 
 const SILERO_FILES = [
 	"onnx/model.onnx",
@@ -91,9 +90,7 @@ export class AssetCacheManager {
 		const modelFiles = [
 			...MOONSHINE_ROOT_FILES,
 			MOONSHINE_ENCODER_FILE,
-			this.shouldCacheQ4Decoder()
-				? MOONSHINE_DECODER_Q4_FILE
-				: MOONSHINE_DECODER_Q8_FILE,
+			MOONSHINE_DECODER_FILE,
 		];
 
 		const repoEntries: Array<{ repo: string; file: string }> = [
@@ -177,7 +174,7 @@ export class AssetCacheManager {
 		const modelFiles = [
 			...MOONSHINE_ROOT_FILES,
 			MOONSHINE_ENCODER_FILE,
-			this.shouldCacheQ4Decoder() ? MOONSHINE_DECODER_Q4_FILE : MOONSHINE_DECODER_Q8_FILE,
+			MOONSHINE_DECODER_FILE,
 		];
 
 		await this.ensureRepoFiles(modelId, modelFiles, modelsCacheDir, onProgress);
@@ -427,10 +424,6 @@ export class AssetCacheManager {
 
 	private getRuntimeFiles(): typeof RUNTIME_FILES {
 		return Platform.isMobileApp ? MOBILE_RUNTIME_FILES : RUNTIME_FILES;
-	}
-
-	private shouldCacheQ4Decoder(): boolean {
-		return !Platform.isMobileApp;
 	}
 
 	private getPluginDir(): string {
