@@ -1,8 +1,8 @@
 {
   "id": "voice-notes-plus",
   "name": "Voice Notes Plus",
-  "version": "0.2.0",
-  "minAppVersion": "1.5.0",
+  "version": "0.3.0",
+  "minAppVersion": "1.12.3",
   "description": "Record audio in-note and transcribe locally using Moonshine AI, with optional post-transcription command hook.",
   "author": "Jacob Mikesell",
   "authorUrl": "jacobmikesell.com",

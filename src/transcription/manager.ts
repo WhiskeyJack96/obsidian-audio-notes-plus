@@ -120,9 +120,6 @@ export class TranscriptionManager {
 					new Notice(`[worker] ${data.message}`, 0);
 				}
 				break;
-			case "download-progress":
-				// Could update a progress indicator here
-				break;
 		}
 	}
 
@@ -144,7 +141,7 @@ export class TranscriptionManager {
 		if (!this.worker) return Promise.resolve();
 		if (this.flushPromise) return this.flushPromise;
 
-		this.flushPromise = new Promise((resolve) => {
+		this.flushPromise = new Promise((resolve, reject) => {
 			this.resolveFlush = () => {
 				this.clearFlushTimeout();
 				this.flushPromise = null;
@@ -152,8 +149,11 @@ export class TranscriptionManager {
 				resolve();
 			};
 			this.flushTimeoutId = window.setTimeout(() => {
-				this.completeFlush();
-			}, 10000);
+				this.clearFlushTimeout();
+				this.flushPromise = null;
+				this.resolveFlush = null;
+				reject(new Error("Flush timed out after 100 seconds"));
+			}, 100_000);
 		});
 
 		this.worker.postMessage({ type: "flush" });
@@ -171,16 +171,15 @@ export class TranscriptionManager {
 		}
 		this.fileTranscribeChunks = [];
 
-		return new Promise<string>((resolve) => {
+		return new Promise<string>((resolve, reject) => {
 			this.resolveFileTranscribe = resolve;
 
 			this.fileTranscribeTimeoutId = window.setTimeout(() => {
-				if (DEBUG_LOGS) {
-					console.log("[manager] transcribeFile: timed out after 120s");
-					new Notice("[manager] transcribeFile timed out", 0);
-				}
-				this.completeFileTranscribe();
-			}, 120_000);
+				this.fileTranscribeChunks = null;
+				this.resolveFileTranscribe = null;
+				this.fileTranscribeTimeoutId = null;
+				reject(new Error("File transcription timed out after 20 minutes"));
+			}, 1_200_000);
 
 			this.worker!.postMessage(
 				{ type: "transcribe-file", audio },

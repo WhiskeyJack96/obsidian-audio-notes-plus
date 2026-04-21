@@ -1,10 +1,10 @@
-import { App, FuzzySuggestModal, MarkdownView, Notice, Plugin, TFile, normalizePath, setIcon, setTooltip } from "obsidian";
+import { App, Editor, EditorPosition, FuzzySuggestModal, MarkdownView, Notice, Plugin, TFile, setIcon, setTooltip } from "obsidian";
 import { AssetCacheManager } from "./cache";
 import { VoiceNotesSettingTab } from "./settings";
 import { TranscriptionManager } from "./transcription/manager";
 import { AudioRecorder } from "./recorder";
 import { DEFAULT_SETTINGS } from "./types";
-import type { VoiceNotesSettings, WorkerStatus } from "./types";
+import type { CommandManagerLike, VoiceNotesSettings, WorkerStatus } from "./types";
 
 type RecordingStartMode = "inline" | "new-note";
 
@@ -13,8 +13,10 @@ interface RecordingTarget {
 	insertOffset: number;
 }
 
-interface CommandManagerLike {
-	executeCommandById: (id: string) => unknown;
+interface TranscriptSelection {
+	editor: Editor;
+	from: EditorPosition;
+	to: EditorPosition;
 }
 
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "webm", "flac", "m4a", "aac", "opus"]);
@@ -42,6 +44,8 @@ class AudioFileSuggestModal extends FuzzySuggestModal<TFile> {
 	}
 }
 
+type BusyState = "idle" | "loading" | "recording" | "transcribing";
+
 export default class VoiceNotesPlugin extends Plugin {
 	settings: VoiceNotesSettings = DEFAULT_SETTINGS;
 	transcriptionManager: TranscriptionManager | null = null;
@@ -49,6 +53,7 @@ export default class VoiceNotesPlugin extends Plugin {
 	private recorder: AudioRecorder | null = null;
 	private statusBarEl: HTMLElement | null = null;
 	private isRecording = false;
+	private busyState: BusyState = "idle";
 	private ribbonIconEl: HTMLElement | null = null;
 	private recordingNotice: Notice | null = null;
 	private pendingTranscriptChunks: string[] = [];
@@ -80,7 +85,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			id: "start-recording",
 			name: "Start voice recording",
 			callback: () => {
-				if (!this.isRecording) this.startRecording();
+				if (this.requireIdle() && !this.isRecording) this.startRecording();
 			},
 		});
 
@@ -96,7 +101,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			id: "start-recording-new-note",
 			name: "Start voice recording in new note",
 			callback: () => {
-				if (!this.isRecording) this.startRecording("new-note");
+				if (this.requireIdle() && !this.isRecording) this.startRecording("new-note");
 			},
 		});
 
@@ -104,7 +109,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			id: "initialize-models",
 			name: "Download transcription models",
 			callback: async () => {
-				await this.ensureModelsLoaded();
+				if (this.requireIdle()) await this.ensureModelsLoaded();
 			},
 		});
 
@@ -121,6 +126,14 @@ export default class VoiceNotesPlugin extends Plugin {
 			name: "Transcribe all audio embeds in current file",
 			editorCallback: () => {
 				this.transcribeAllEmbedsInCurrentFile();
+			},
+		});
+
+		this.addCommand({
+			id: "transcribe-to-clipboard",
+			name: "Transcribe audio file to clipboard",
+			callback: () => {
+				this.pickAndTranscribeToClipboard();
 			},
 		});
 
@@ -141,6 +154,13 @@ export default class VoiceNotesPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	private requireIdle(allowStop = false): boolean {
+		if (this.busyState === "idle") return true;
+		if (allowStop && this.busyState === "recording") return true;
+		new Notice("Voice Notes Plus: Already busy — wait for the current operation to finish.");
+		return false;
 	}
 
 	private async ensureModelsLoaded(): Promise<void> {
@@ -165,6 +185,7 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private pickAndTranscribeAudioFile(): void {
+		if (!this.requireIdle()) return;
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const selection = activeView?.editor.getSelection().trim() ?? "";
 
@@ -198,6 +219,8 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private async transcribeAudioFile(file: TFile, appendAfterOffset?: number): Promise<void> {
+		if (!this.requireIdle()) return;
+
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView?.file) {
 			new Notice("Voice Notes Plus: Open a note to insert the transcription");
@@ -207,6 +230,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		const insertOffset = appendAfterOffset
 			?? activeView.editor.posToOffset(activeView.editor.getCursor());
 
+		this.busyState = "transcribing";
 		try {
 			this.updateStatusBar("loading", "Decoding audio...");
 			const arrayBuffer = await this.app.vault.readBinary(file);
@@ -216,23 +240,31 @@ export default class VoiceNotesPlugin extends Plugin {
 			this.updateStatusBar("recording_end", "Transcribing file...");
 
 			const transcript = await this.transcriptionManager!.transcribeFile(pcm);
+			let transcriptSelection: TranscriptSelection | null = null;
 
 			if (appendAfterOffset != null) {
-				// Appending after an existing embed/link — only insert the transcription line
 				if (transcript.trim()) {
 					const editor = activeView.editor;
-					const pos = editor.offsetToPos(insertOffset);
-					editor.replaceRange(`\n#transcription ${transcript.trim()}`, pos);
+					const trimmed = transcript.trim();
+					const block = `> [!transcript]\n> ${trimmed}`;
+					const insertion = this.formatInsertion(editor.getValue(), insertOffset, block);
+					editor.replaceRange(insertion.text, editor.offsetToPos(insertOffset));
+					transcriptSelection = this.computeTranscriptSelection(editor, insertOffset, insertion.text, block, trimmed);
 				}
 			} else {
 				const insertTarget: RecordingTarget = {
 					filePath: activeView.file!.path,
 					insertOffset,
 				};
-				await this.insertRecordingOutput(insertTarget, file.path, transcript);
+				transcriptSelection = await this.insertRecordingOutput(insertTarget, file.path, transcript);
 			}
 
+			this.app.workspace.trigger("voice-notes-plus:transcription", transcript, activeView.file!.path);
+
 			if (this.settings.postTranscriptionCommandId) {
+				if (transcriptSelection) {
+					transcriptSelection.editor.setSelection(transcriptSelection.from, transcriptSelection.to);
+				}
 				if (!this.executeCommand(this.settings.postTranscriptionCommandId)) {
 					new Notice("Voice Notes Plus: Post-transcription command failed to execute");
 				}
@@ -250,10 +282,65 @@ export default class VoiceNotesPlugin extends Plugin {
 			new Notice(
 				`Voice Notes Plus: Transcription failed - ${e instanceof Error ? e.message : String(e)}`
 			);
+		} finally {
+			this.busyState = "idle";
+		}
+	}
+
+	private pickAndTranscribeToClipboard(): void {
+		if (!this.requireIdle()) return;
+
+		const audioFiles = this.app.vault.getFiles()
+			.filter((f) => AUDIO_EXTENSIONS.has(f.extension.toLowerCase()))
+			.sort((a, b) => b.stat.mtime - a.stat.mtime);
+
+		if (audioFiles.length === 0) {
+			new Notice("Voice Notes Plus: No audio files found in vault");
+			return;
+		}
+
+		new AudioFileSuggestModal(this.app, audioFiles, (file) => {
+			void this.transcribeToClipboard(file);
+		}).open();
+	}
+
+	private async transcribeToClipboard(file: TFile): Promise<void> {
+		if (!this.requireIdle()) return;
+
+		this.busyState = "transcribing";
+		try {
+			this.updateStatusBar("loading", "Decoding audio...");
+			const arrayBuffer = await this.app.vault.readBinary(file);
+			const pcm = await this.decodeAudioToPcm(arrayBuffer);
+
+			await this.ensureModelsLoaded();
+			this.updateStatusBar("recording_end", "Transcribing...");
+
+			const transcript = await this.transcriptionManager!.transcribeFile(pcm);
+			await navigator.clipboard.writeText(transcript);
+
+			this.app.workspace.trigger("voice-notes-plus:transcription", transcript, null);
+
+			if (!this.settings.keepModelsLoaded) {
+				this.transcriptionManager?.destroy();
+				this.transcriptionManager = null;
+			}
+
+			this.updateStatusBar(null, "");
+			new Notice("Voice Notes Plus: Transcript copied to clipboard");
+		} catch (e) {
+			this.updateStatusBar(null, "");
+			new Notice(
+				`Voice Notes Plus: Transcription failed - ${e instanceof Error ? e.message : String(e)}`
+			);
+		} finally {
+			this.busyState = "idle";
 		}
 	}
 
 	private async transcribeAllEmbedsInCurrentFile(): Promise<void> {
+		if (!this.requireIdle()) return;
+
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView?.file) {
 			new Notice("Voice Notes Plus: Open a note first");
@@ -271,15 +358,18 @@ export default class VoiceNotesPlugin extends Plugin {
 			return;
 		}
 
+		this.busyState = "transcribing";
 		try {
 			await this.ensureModelsLoaded();
 		} catch (e) {
+			this.busyState = "idle";
 			new Notice(`Voice Notes Plus: Failed to initialize - ${e instanceof Error ? e.message : String(e)}`);
 			return;
 		}
 
 		let transcribed = 0;
 		let skipped = 0;
+		let failed = 0;
 
 		// Process in reverse order so earlier offsets remain valid after insertions
 		const sortedEmbeds = [...audioEmbeds].sort(
@@ -290,9 +380,9 @@ export default class VoiceNotesPlugin extends Plugin {
 			const editor = activeView.editor;
 			const currentContent = editor.getValue();
 
-			// Skip if already transcribed
+			// Skip if already transcribed (tolerate whitespace variations)
 			const afterEmbed = currentContent.slice(embed.position.end.offset);
-			if (afterEmbed.match(/^\n#transcription /)) {
+			if (/^\s*\n>\s*\[!transcript\]/.test(afterEmbed)) {
 				skipped++;
 				continue;
 			}
@@ -306,16 +396,22 @@ export default class VoiceNotesPlugin extends Plugin {
 
 			this.updateStatusBar("recording_end", `Transcribing ${transcribed + 1}/${audioEmbeds.length}...`);
 
-			const arrayBuffer = await this.app.vault.readBinary(file);
-			const pcm = await this.decodeAudioToPcm(arrayBuffer);
-			const transcript = await this.transcriptionManager!.transcribeFile(pcm);
+			try {
+				const arrayBuffer = await this.app.vault.readBinary(file);
+				const pcm = await this.decodeAudioToPcm(arrayBuffer);
+				const transcript = await this.transcriptionManager!.transcribeFile(pcm);
 
-			if (transcript.trim()) {
-				const insertPos = editor.offsetToPos(embed.position.end.offset);
-				editor.replaceRange(`\n#transcription ${transcript.trim()}`, insertPos);
-				transcribed++;
-			} else {
-				skipped++;
+				if (transcript.trim()) {
+					const insertPos = editor.offsetToPos(embed.position.end.offset);
+					editor.replaceRange(`\n> [!transcript]\n> ${transcript.trim()}`, insertPos);
+					transcribed++;
+					this.app.workspace.trigger("voice-notes-plus:transcription", transcript, activeView.file!.path);
+				} else {
+					skipped++;
+				}
+			} catch (e) {
+				failed++;
+				new Notice(`Voice Notes Plus: Failed to transcribe ${embed.link} - ${e instanceof Error ? e.message : String(e)}`);
 			}
 		}
 
@@ -324,8 +420,12 @@ export default class VoiceNotesPlugin extends Plugin {
 			this.transcriptionManager = null;
 		}
 
+		this.busyState = "idle";
 		this.updateStatusBar(null, "");
-		new Notice(`Voice Notes Plus: Transcribed ${transcribed} embed${transcribed !== 1 ? "s" : ""}${skipped > 0 ? `, ${skipped} skipped` : ""}`);
+		const parts = [`Transcribed ${transcribed} embed${transcribed !== 1 ? "s" : ""}`];
+		if (skipped > 0) parts.push(`${skipped} skipped`);
+		if (failed > 0) parts.push(`${failed} failed`);
+		new Notice(`Voice Notes Plus: ${parts.join(", ")}`);
 
 		if (transcribed > 0 && this.settings.postTranscriptionCommandId) {
 			if (!this.executeCommand(this.settings.postTranscriptionCommandId)) {
@@ -354,6 +454,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		if (this.isRecording) {
 			await this.stopRecording();
 		} else {
+			if (!this.requireIdle()) return;
 			await this.startRecording();
 		}
 	}
@@ -364,15 +465,18 @@ export default class VoiceNotesPlugin extends Plugin {
 			return;
 		}
 
+		this.busyState = "loading";
 		try {
 			await this.ensureModelsLoaded();
 		} catch (e) {
+			this.busyState = "idle";
 			new Notice(`Voice Notes Plus: Failed to initialize - ${e instanceof Error ? e.message : String(e)}`);
 			this.updateStatusBar(null, "");
 			return;
 		}
 
 		this.isRecording = true;
+		this.busyState = "recording";
 		this.recordingTarget = target;
 		this.pendingTranscriptChunks = [];
 		this.updateRecordingUi();
@@ -398,6 +502,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			});
 		} catch (e) {
 			this.isRecording = false;
+			this.busyState = "idle";
 			this.recordingTarget = null;
 			this.pendingTranscriptChunks = [];
 			this.updateRecordingUi();
@@ -414,16 +519,20 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.updateStatusBar("recording_end", "Finishing...");
 
 		let outputInserted = false;
+		let finalTranscript = "";
+		let targetFilePath = this.recordingTarget.filePath;
+		let transcriptSelection: TranscriptSelection | null = null;
 
 		try {
 			const audioBlobPromise = this.recorder.stop();
 			const flushPromise = this.transcriptionManager?.flush() ?? Promise.resolve();
 			const [audioBlob] = await Promise.all([audioBlobPromise, flushPromise]);
 			const audioFilePath = await this.saveAudioFile(audioBlob);
-			await this.insertRecordingOutput(
+			finalTranscript = this.getBufferedTranscript();
+			transcriptSelection = await this.insertRecordingOutput(
 				this.recordingTarget,
 				audioFilePath,
-				this.getBufferedTranscript()
+				finalTranscript
 			);
 			outputInserted = true;
 		} catch (e) {
@@ -439,13 +548,21 @@ export default class VoiceNotesPlugin extends Plugin {
 				this.transcriptionManager = null;
 			}
 
+			this.busyState = "idle";
 			this.updateRecordingUi();
 			this.updateStatusBar(null, "");
 		}
 
-		if (outputInserted && this.settings.postTranscriptionCommandId) {
-			if (!this.executeCommand(this.settings.postTranscriptionCommandId)) {
-				new Notice("Voice Notes Plus: Post-transcription command failed to execute");
+		if (outputInserted) {
+			this.app.workspace.trigger("voice-notes-plus:transcription", finalTranscript, targetFilePath);
+
+			if (this.settings.postTranscriptionCommandId) {
+				if (transcriptSelection) {
+					transcriptSelection.editor.setSelection(transcriptSelection.from, transcriptSelection.to);
+				}
+				if (!this.executeCommand(this.settings.postTranscriptionCommandId)) {
+					new Notice("Voice Notes Plus: Post-transcription command failed to execute");
+				}
 			}
 		}
 	}
@@ -461,20 +578,23 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private async saveAudioFile(audioBlob: Blob): Promise<string> {
-		const folderPath = normalizePath(this.settings.audioFolder);
-
-		// Ensure the audio folder exists
-		if (!this.app.vault.getAbstractFileByPath(folderPath)) {
-			await this.app.vault.createFolder(folderPath);
-		}
-
+		const ext = this.recorder?.fileExtension ?? "webm";
 		const timestamp = new Date()
 			.toISOString()
 			.replace(/[:.]/g, "-")
 			.replace("T", "-")
 			.replace("Z", "");
-		const fileName = `recording-${timestamp}.webm`;
-		const filePath = normalizePath(`${folderPath}/${fileName}`);
+		const activeFile = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
+		const template = this.settings.recordingFilenameTemplate || "recording-{{date}}";
+		const baseName = template
+			.replace("{{date}}", timestamp)
+			.replace("{{noteName}}", activeFile?.basename ?? "");
+		const fileName = `${baseName}.${ext}`;
+
+		// Use the active note as source so Obsidian respects the user's
+		// "Default location for new attachments" setting.
+		const sourcePath = activeFile?.path ?? "";
+		const filePath = await this.app.fileManager.getAvailablePathForAttachment(fileName, sourcePath);
 
 		const arrayBuffer = await audioBlob.arrayBuffer();
 		await this.app.vault.createBinary(filePath, new Uint8Array(arrayBuffer));
@@ -483,14 +603,14 @@ export default class VoiceNotesPlugin extends Plugin {
 
 	private formatTranscriptionBlock(audioFilePath: string, transcript: string): string {
 		if (!transcript) return `![[${audioFilePath}]]`;
-		return `![[${audioFilePath}]]\n#transcription ${transcript}`;
+		return `![[${audioFilePath}]]\n> [!transcript]\n> ${transcript}`;
 	}
 
 	private async insertRecordingOutput(
 		target: RecordingTarget,
 		audioFilePath: string,
 		transcript: string
-	): Promise<void> {
+	): Promise<TranscriptSelection | null> {
 		const block = this.formatTranscriptionBlock(audioFilePath, transcript);
 
 		const openView = this.findOpenMarkdownView(target.filePath);
@@ -500,7 +620,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			const insertion = this.formatInsertion(editor.getValue(), safeOffset, block);
 			editor.replaceRange(insertion.text, editor.offsetToPos(safeOffset));
 			editor.setCursor(editor.offsetToPos(insertion.cursorOffset));
-			return;
+			return this.computeTranscriptSelection(editor, safeOffset, insertion.text, block, transcript);
 		}
 
 		const file = this.app.vault.getAbstractFileByPath(target.filePath);
@@ -508,14 +628,38 @@ export default class VoiceNotesPlugin extends Plugin {
 			throw new Error("Target note no longer exists");
 		}
 
-		const current = await this.app.vault.read(file);
-		const safeOffset = Math.min(target.insertOffset, current.length);
-		const insertion = this.formatInsertion(current, safeOffset, block);
-		const nextContent =
-			current.slice(0, safeOffset) +
-			insertion.text +
-			current.slice(safeOffset);
-		await this.app.vault.modify(file, nextContent);
+		await this.app.vault.process(file, (current) => {
+			const safeOffset = Math.min(target.insertOffset, current.length);
+			const insertion = this.formatInsertion(current, safeOffset, block);
+			return (
+				current.slice(0, safeOffset) +
+				insertion.text +
+				current.slice(safeOffset)
+			);
+		});
+		return null;
+	}
+
+	private computeTranscriptSelection(
+		editor: Editor,
+		insertOffset: number,
+		insertionText: string,
+		block: string,
+		transcript: string
+	): TranscriptSelection | null {
+		if (!transcript.trim()) return null;
+		const calloutHeader = "\n> [!transcript]\n> ";
+		const headerIdx = block.indexOf(calloutHeader);
+		if (headerIdx < 0) return null;
+		const blockStartInInsertion = insertionText.indexOf(block);
+		if (blockStartInInsertion < 0) return null;
+		const transcriptAbsStart = insertOffset + blockStartInInsertion + headerIdx + calloutHeader.length;
+		const transcriptAbsEnd = insertOffset + blockStartInInsertion + block.length;
+		return {
+			editor,
+			from: editor.offsetToPos(transcriptAbsStart),
+			to: editor.offsetToPos(transcriptAbsEnd),
+		};
 	}
 
 	private formatInsertion(
@@ -597,28 +741,37 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private async waitForMarkdownView(previousPath: string | null): Promise<MarkdownView | null> {
-		for (let attempt = 0; attempt < 20; attempt += 1) {
-			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-			const currentPath = view?.file?.path ?? null;
-			if (view?.file && currentPath !== previousPath) {
-				return view;
-			}
-			await this.sleep(50);
+		// Check if already changed before subscribing
+		const current = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (current?.file && current.file.path !== previousPath) {
+			return current;
 		}
-		return null;
+
+		return new Promise<MarkdownView | null>((resolve) => {
+			const timeoutId = window.setTimeout(() => {
+				this.app.workspace.offref(ref);
+				resolve(null);
+			}, 5000);
+
+			const ref = this.app.workspace.on("active-leaf-change", () => {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (view?.file && view.file.path !== previousPath) {
+					window.clearTimeout(timeoutId);
+					this.app.workspace.offref(ref);
+					resolve(view);
+				}
+			});
+
+			this.registerEvent(ref);
+		});
 	}
 
 	private executeCommand(commandId: string): boolean {
 		try {
-			(this.app as unknown as { commands: CommandManagerLike }).commands.executeCommandById(commandId);
-			return true;
+			return (this.app as unknown as { commands: CommandManagerLike }).commands.executeCommandById(commandId);
 		} catch {
 			return false;
 		}
-	}
-
-	private sleep(ms: number): Promise<void> {
-		return new Promise((resolve) => window.setTimeout(resolve, ms));
 	}
 
 	private updateRecordingUi(): void {

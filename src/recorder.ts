@@ -1,5 +1,24 @@
 import { SAMPLE_RATE } from "./transcription/constants";
 
+const PREFERRED_MIME_TYPES = [
+	"audio/webm;codecs=opus",
+	"audio/webm",
+	"audio/ogg;codecs=opus",
+	"audio/mp4",
+] as const;
+
+function pickMimeType(): { mimeType: string; extension: string } {
+	for (const mime of PREFERRED_MIME_TYPES) {
+		if (MediaRecorder.isTypeSupported(mime)) {
+			const ext = mime.startsWith("audio/mp4") ? "m4a"
+				: mime.startsWith("audio/ogg") ? "ogg"
+				: "webm";
+			return { mimeType: mime, extension: ext };
+		}
+	}
+	return { mimeType: "", extension: "webm" };
+}
+
 /**
  * Inline AudioWorkletProcessor source code.
  * This is tiny and has zero dependencies, so we inline it
@@ -43,6 +62,11 @@ export class AudioRecorder {
 	private workletNode: AudioWorkletNode | null = null;
 	private mediaRecorder: MediaRecorder | null = null;
 	private recordedChunks: Blob[] = [];
+	private chosenMime: { mimeType: string; extension: string } | null = null;
+
+	get fileExtension(): string {
+		return this.chosenMime?.extension ?? "webm";
+	}
 
 	/**
 	 * Start dual-stream recording:
@@ -85,11 +109,14 @@ export class AudioRecorder {
 
 		this.source.connect(this.workletNode);
 
-		// Set up MediaRecorder for .webm file saving
+		// Set up MediaRecorder for audio file saving
 		this.recordedChunks = [];
-		this.mediaRecorder = new MediaRecorder(this.stream, {
-			mimeType: "audio/webm;codecs=opus",
-		});
+		this.chosenMime = pickMimeType();
+		const recorderOptions: MediaRecorderOptions = {};
+		if (this.chosenMime.mimeType) {
+			recorderOptions.mimeType = this.chosenMime.mimeType;
+		}
+		this.mediaRecorder = new MediaRecorder(this.stream, recorderOptions);
 		this.mediaRecorder.ondataavailable = (event: BlobEvent) => {
 			if (event.data.size > 0) {
 				this.recordedChunks.push(event.data);
@@ -108,15 +135,16 @@ export class AudioRecorder {
 			this.workletNode?.disconnect();
 			this.source?.disconnect();
 
+			const blobType = this.chosenMime?.mimeType || "audio/webm";
 			if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
 				this.mediaRecorder.onstop = () => {
-					const blob = new Blob(this.recordedChunks, { type: "audio/webm" });
+					const blob = new Blob(this.recordedChunks, { type: blobType });
 					this.cleanup();
 					resolve(blob);
 				};
 				this.mediaRecorder.stop();
 			} else {
-				const blob = new Blob(this.recordedChunks, { type: "audio/webm" });
+				const blob = new Blob(this.recordedChunks, { type: blobType });
 				this.cleanup();
 				resolve(blob);
 			}

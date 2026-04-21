@@ -27,8 +27,7 @@ const sharedConfig = {
 	target: "es2020",
 };
 
-// Pass 1: Build the worker first (ESM, self-contained, browser platform)
-await esbuild.build({
+const workerConfig = {
 	...sharedConfig,
 	entryPoints: ["src/transcription/worker.ts"],
 	format: "esm",
@@ -51,47 +50,93 @@ await esbuild.build({
 		"process.env.NODE_ENV": isProd ? '"production"' : '"development"',
 		DEBUG_LOGS: String(debugLogs),
 	},
-});
+};
 
-// Read the built worker and Base64-encode it for inlining into main.js.
-// This lets the plugin work with BRAT and the community plugin store,
-// which only distribute main.js, manifest.json, and styles.css.
-const workerCode = fs.readFileSync("worker.js", "utf-8");
-const workerBase64 = Buffer.from(workerCode).toString("base64");
+function readWorkerBase64() {
+	const workerCode = fs.readFileSync("worker.js", "utf-8");
+	return Buffer.from(workerCode).toString("base64");
+}
 
-// Pass 2: Main plugin bundle (CJS for Obsidian)
-const mainContext = await esbuild.context({
-	...sharedConfig,
-	banner: { js: banner },
-	entryPoints: ["src/main.ts"],
-	external: [
-		"obsidian",
-		"electron",
-		"@codemirror/autocomplete",
-		"@codemirror/collab",
-		"@codemirror/commands",
-		"@codemirror/language",
-		"@codemirror/lint",
-		"@codemirror/search",
-		"@codemirror/state",
-		"@codemirror/view",
-		"@lezer/common",
-		"@lezer/highlight",
-		"@lezer/lr",
-		...builtins,
-	],
-	format: "cjs",
-	outfile: "main.js",
-	define: {
-		WORKER_BASE64: JSON.stringify(workerBase64),
+function mainDefines() {
+	return {
+		WORKER_BASE64: JSON.stringify(readWorkerBase64()),
 		DEBUG_LOGS: String(debugLogs),
-	},
-});
+	};
+}
+
+const mainExternals = [
+	"obsidian",
+	"electron",
+	"@codemirror/autocomplete",
+	"@codemirror/collab",
+	"@codemirror/commands",
+	"@codemirror/language",
+	"@codemirror/lint",
+	"@codemirror/search",
+	"@codemirror/state",
+	"@codemirror/view",
+	"@lezer/common",
+	"@lezer/highlight",
+	"@lezer/lr",
+	...builtins,
+];
 
 if (isProd) {
-	await mainContext.rebuild();
-	await mainContext.dispose();
+	// Production: build worker, inline into main, done.
+	await esbuild.build(workerConfig);
+	await esbuild.build({
+		...sharedConfig,
+		banner: { js: banner },
+		entryPoints: ["src/main.ts"],
+		external: mainExternals,
+		format: "cjs",
+		outfile: "main.js",
+		define: mainDefines(),
+	});
 	process.exit(0);
 } else {
+	// Dev: rebuild worker first, then watch both.
+	// When the worker changes, rebuild it and then rebuild main.js
+	// so the inlined Base64 stays current.
+	await esbuild.build(workerConfig);
+
+	const mainContext = await esbuild.context({
+		...sharedConfig,
+		banner: { js: banner },
+		entryPoints: ["src/main.ts"],
+		external: mainExternals,
+		format: "cjs",
+		outfile: "main.js",
+		define: mainDefines(),
+	});
+
+	const workerContext = await esbuild.context({
+		...workerConfig,
+		plugins: [{
+			name: "rebuild-main-on-worker-change",
+			setup(build) {
+				build.onEnd(async (result) => {
+					if (result.errors.length === 0) {
+						// Worker changed — rebuild main with fresh Base64
+						await mainContext.cancel();
+						await mainContext.dispose();
+						const freshMain = await esbuild.context({
+							...sharedConfig,
+							banner: { js: banner },
+							entryPoints: ["src/main.ts"],
+							external: mainExternals,
+							format: "cjs",
+							outfile: "main.js",
+							define: mainDefines(),
+						});
+						await freshMain.rebuild();
+						await freshMain.watch();
+					}
+				});
+			},
+		}],
+	});
+
+	await workerContext.watch();
 	await mainContext.watch();
 }

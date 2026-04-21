@@ -17,13 +17,11 @@ export interface CachedFileInfo {
 	bytes: number;
 }
 
-const CACHE_SCHEMA_VERSION = 2;
 const TRANSFORMERS_VERSION = "4.0.0";
 const ORT_VERSION = "1.25.0-dev.20260327-722743c0e2";
 const HUGGING_FACE_HOST = "https://huggingface.co";
 const HUGGING_FACE_REVISION = "main";
 const CACHE_ROOT_PROBE_FILE = ".cache-root";
-const CACHE_MANIFEST_FILE = "cache-manifest.json";
 
 const MOONSHINE_ROOT_FILES = [
 	"config.json",
@@ -59,21 +57,6 @@ const RUNTIME_FILES = [
 		url: `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/ort-wasm-simd-threaded.asyncify.mjs`,
 	},
 ] as const;
-
-// Transformers.js 4.x picks the .asyncify. WASM variant on every
-// non-Safari browser (including Electron/Obsidian desktop); Safari and
-// mobile fall back to the plain files.  On Android, the plain binary
-// is loaded via a blob URL from inside the worker (see worker.ts), so
-// caching both sets keeps every platform working from a single layout.
-const MOBILE_RUNTIME_FILES = RUNTIME_FILES;
-
-interface CacheManifest {
-	schemaVersion: number;
-	transformersVersion: string;
-	platformKey: string;
-	modelId: string;
-	updatedAt: string;
-}
 
 export class AssetCacheManager {
 	constructor(private plugin: VoiceNotesPlugin) {}
@@ -167,7 +150,6 @@ export class AssetCacheManager {
 		const modelId = MODEL_IDS[modelSize];
 		const modelsCacheDir = this.getModelsCacheDir();
 		const runtimeCacheDir = this.getRuntimeCacheDir();
-		const platformKey = this.getPlatformKey();
 
 		await this.ensureDir(modelsCacheDir);
 		await this.ensureDir(runtimeCacheDir);
@@ -183,16 +165,8 @@ export class AssetCacheManager {
 		await this.ensureRepoFiles(modelId, modelFiles, modelsCacheDir, onProgress);
 		await this.ensureRepoFiles("onnx-community/silero-vad", SILERO_FILES, modelsCacheDir, onProgress);
 		await this.ensureRuntimeFiles(runtimeCacheDir, onProgress);
-		await this.writeManifest({
-			schemaVersion: CACHE_SCHEMA_VERSION,
-			transformersVersion: TRANSFORMERS_VERSION,
-			platformKey,
-			modelId,
-			updatedAt: new Date().toISOString(),
-		});
 
 		const config: LocalAssetConfig = {
-			assetMode: "local",
 			modelBaseUrl: this.getDirectoryResourceBase(
 				normalizePath(`${modelsCacheDir}/${CACHE_ROOT_PROBE_FILE}`),
 				CACHE_ROOT_PROBE_FILE
@@ -201,7 +175,6 @@ export class AssetCacheManager {
 				normalizePath(`${runtimeCacheDir}/${RUNTIME_FILES[0].fileName}`),
 				RUNTIME_FILES[0].fileName
 			),
-			platformKey,
 		};
 
 		// On mobile, file:// URLs are not fetchable from a blob-URL Web
@@ -399,11 +372,6 @@ export class AssetCacheManager {
 		await this.plugin.app.vault.adapter.write(probePath, "");
 	}
 
-	private async writeManifest(manifest: CacheManifest): Promise<void> {
-		const path = normalizePath(`${this.getPluginCacheRoot()}/${CACHE_MANIFEST_FILE}`);
-		await this.plugin.app.vault.adapter.write(path, JSON.stringify(manifest, null, 2));
-	}
-
 	private getDirectoryResourceBase(relativeFilePath: string, fileName: string): string {
 		const resourceUrl = this.plugin.app.vault.adapter.getResourcePath(relativeFilePath);
 		if (resourceUrl.endsWith(fileName)) {
@@ -428,7 +396,7 @@ export class AssetCacheManager {
 	}
 
 	private getRuntimeFiles(): typeof RUNTIME_FILES {
-		return Platform.isMobileApp ? MOBILE_RUNTIME_FILES : RUNTIME_FILES;
+		return RUNTIME_FILES;
 	}
 
 	private getPluginDir(): string {

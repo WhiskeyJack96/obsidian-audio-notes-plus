@@ -1,8 +1,7 @@
-import { AbstractInputSuggest, App, Notice, PluginSettingTab, Setting, TFolder } from "obsidian";
+import { AbstractInputSuggest, App, Notice, PluginSettingTab, Setting } from "obsidian";
 import { AssetCacheManager } from "./cache";
 import type { CachedFileInfo } from "./cache";
 import type VoiceNotesPlugin from "./main";
-import { DEFAULT_SETTINGS } from "./types";
 import type { VoiceNotesSettings } from "./types";
 
 interface CommandSuggestion {
@@ -42,44 +41,6 @@ class CommandInputSuggest extends AbstractInputSuggest<CommandSuggestion> {
 	}
 }
 
-class FolderInputSuggest extends AbstractInputSuggest<TFolder> {
-	constructor(app: App, textInputEl: HTMLInputElement) {
-		super(app, textInputEl);
-	}
-
-	protected getSuggestions(query: string): TFolder[] {
-		const normalizedQuery = query.trim().toLowerCase();
-		const folders: TFolder[] = [];
-		const root = this.app.vault.getRoot();
-		this.collectFolders(root, folders);
-		return folders
-			.filter((folder) => {
-				if (!normalizedQuery) return true;
-				return folder.path.toLowerCase().includes(normalizedQuery);
-			})
-			.slice(0, 50);
-	}
-
-	renderSuggestion(folder: TFolder, el: HTMLElement): void {
-		el.createDiv({ text: folder.path || "/" });
-	}
-
-	selectSuggestion(folder: TFolder): void {
-		(this as unknown as { inputEl: HTMLInputElement }).inputEl.value = folder.path;
-		(this as unknown as { inputEl: HTMLInputElement }).inputEl.dispatchEvent(new Event("change"));
-		this.close();
-	}
-
-	private collectFolders(folder: TFolder, result: TFolder[]): void {
-		for (const child of folder.children) {
-			if (child instanceof TFolder) {
-				result.push(child);
-				this.collectFolders(child, result);
-			}
-		}
-	}
-}
-
 export class VoiceNotesSettingTab extends PluginSettingTab {
 	plugin: VoiceNotesPlugin;
 
@@ -110,18 +71,6 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Prefer WebGPU")
-			.setDesc("Use GPU acceleration when available. Falls back to WASM if not supported.")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.preferWebGPU)
-					.onChange(async (value) => {
-						this.plugin.settings.preferWebGPU = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
 			.setName("Keep models loaded")
 			.setDesc("Keep transcription models in memory between recordings for faster startup.")
 			.addToggle((toggle) =>
@@ -133,56 +82,21 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
-		// -- Audio section --
-		new Setting(containerEl).setName("Audio").setHeading();
+		// -- Recording section --
+		new Setting(containerEl).setName("Recording").setHeading();
 
 		new Setting(containerEl)
-			.setName("Audio folder")
-			.setDesc("Vault folder where recorded audio files are saved.")
-			.addText((text) => {
+			.setName("Audio filename template")
+			.setDesc(
+				"Template for saved audio filenames. " +
+				"Supported tokens: {{date}} (ISO timestamp), {{noteName}} (active note basename)."
+			)
+			.addText((text) =>
 				text
-					.setPlaceholder(DEFAULT_SETTINGS.audioFolder)
-					.setValue(this.plugin.settings.audioFolder)
+					.setPlaceholder("recording-{{date}}")
+					.setValue(this.plugin.settings.recordingFilenameTemplate)
 					.onChange(async (value) => {
-						this.plugin.settings.audioFolder = value || DEFAULT_SETTINGS.audioFolder;
-						await this.plugin.saveSettings();
-					});
-
-				const suggest = new FolderInputSuggest(this.app, text.inputEl);
-				suggest.onSelect(async (folder) => {
-					text.setValue(folder.path);
-					this.plugin.settings.audioFolder = folder.path || DEFAULT_SETTINGS.audioFolder;
-					await this.plugin.saveSettings();
-				});
-			});
-
-		// -- Voice activity detection section --
-		new Setting(containerEl).setName("Voice activity detection").setHeading();
-
-		new Setting(containerEl)
-			.setName("Speech threshold")
-			.setDesc("VAD confidence threshold (0-1). Lower values detect quieter speech but may pick up noise.")
-			.addSlider((slider) =>
-				slider
-					.setLimits(0.1, 0.9, 0.05)
-					.setValue(this.plugin.settings.speechThreshold)
-					.setDynamicTooltip()
-					.onChange(async (value) => {
-						this.plugin.settings.speechThreshold = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Silence duration")
-			.setDesc("Milliseconds of silence before ending a speech segment.")
-			.addSlider((slider) =>
-				slider
-					.setLimits(200, 2000, 50)
-					.setValue(this.plugin.settings.silenceDuration)
-					.setDynamicTooltip()
-					.onChange(async (value) => {
-						this.plugin.settings.silenceDuration = value;
+						this.plugin.settings.recordingFilenameTemplate = value;
 						await this.plugin.saveSettings();
 					})
 			);

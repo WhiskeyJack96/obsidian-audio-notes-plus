@@ -48,17 +48,28 @@ This plugin is not yet available in the Obsidian Community Plugin directory.
 | Start voice recording in new note | Run the configured "new note command", then start recording in the new note |
 | Stop voice recording | Stop recording and finalize transcription |
 | Toggle voice recording | Start or stop recording |
+| Transcribe audio file | Pick a vault audio file and insert transcript at cursor |
+| Transcribe audio file to clipboard | Pick a vault audio file and copy transcript to clipboard (no note needed) |
+| Transcribe all audio embeds in current file | Transcribe every audio embed in the active note |
 | Download transcription models | Pre-download models without recording |
+
+### Plugin API
+
+After every successful transcription the plugin emits a workspace event that other plugins (QuickAdd, Templater, etc.) can subscribe to:
+
+```js
+app.workspace.on("voice-notes-plus:transcription", (transcript, filePath) => {
+    // transcript: string — the transcribed text
+    // filePath: string | null — vault path of the target note (null for clipboard transcriptions)
+});
+```
 
 ## Settings
 
 - **Model size** — Base (more accurate) or Tiny (faster, less memory)
-- **Prefer WebGPU** — GPU acceleration when available
 - **Keep models loaded** — keep models in memory between recordings
-- **Audio folder** — vault folder for saved recordings (default: `Voice Notes/`)
-- **Speech threshold** — VAD confidence threshold (0–1)
-- **Silence duration** — milliseconds of silence before ending a segment
-- **Post-transcription command** — Obsidian command to run after transcription completes
+- **Audio filename template** — template for saved recordings; supports `{{date}}` and `{{noteName}}` tokens (default: `recording-{{date}}`)
+- **Post-transcription command** — Obsidian command to run after transcription completes; the transcribed text is selected so text-transformation plugins can act on it directly
 - **New note command** — command to run before starting a recording in a new note
 
 ## License
