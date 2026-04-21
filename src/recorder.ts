@@ -84,45 +84,50 @@ export class AudioRecorder {
 			},
 		});
 
-		// Set up AudioContext + WorkletNode for PCM streaming
-		this.audioContext = new AudioContext({
-			sampleRate: SAMPLE_RATE,
-		});
+		try {
+			// Set up AudioContext + WorkletNode for PCM streaming
+			this.audioContext = new AudioContext({
+				sampleRate: SAMPLE_RATE,
+			});
 
-		const blob = new Blob([PROCESSOR_CODE], { type: "application/javascript" });
-		const processorUrl = URL.createObjectURL(blob);
-		await this.audioContext.audioWorklet.addModule(processorUrl);
-		URL.revokeObjectURL(processorUrl);
+			const blob = new Blob([PROCESSOR_CODE], { type: "application/javascript" });
+			const processorUrl = URL.createObjectURL(blob);
+			await this.audioContext.audioWorklet.addModule(processorUrl);
+			URL.revokeObjectURL(processorUrl);
 
-		this.source = this.audioContext.createMediaStreamSource(this.stream);
-		this.workletNode = new AudioWorkletNode(this.audioContext, "vad-processor", {
-			numberOfInputs: 1,
-			numberOfOutputs: 0,
-			channelCount: 1,
-			channelCountMode: "explicit",
-			channelInterpretation: "discrete",
-		});
+			this.source = this.audioContext.createMediaStreamSource(this.stream);
+			this.workletNode = new AudioWorkletNode(this.audioContext, "vad-processor", {
+				numberOfInputs: 1,
+				numberOfOutputs: 0,
+				channelCount: 1,
+				channelCountMode: "explicit",
+				channelInterpretation: "discrete",
+			});
 
-		this.workletNode.port.onmessage = (event: MessageEvent) => {
-			onAudioChunk(event.data.buffer as Float32Array);
-		};
+			this.workletNode.port.onmessage = (event: MessageEvent) => {
+				onAudioChunk(event.data.buffer as Float32Array);
+			};
 
-		this.source.connect(this.workletNode);
+			this.source.connect(this.workletNode);
 
-		// Set up MediaRecorder for audio file saving
-		this.recordedChunks = [];
-		this.chosenMime = pickMimeType();
-		const recorderOptions: MediaRecorderOptions = {};
-		if (this.chosenMime.mimeType) {
-			recorderOptions.mimeType = this.chosenMime.mimeType;
-		}
-		this.mediaRecorder = new MediaRecorder(this.stream, recorderOptions);
-		this.mediaRecorder.ondataavailable = (event: BlobEvent) => {
-			if (event.data.size > 0) {
-				this.recordedChunks.push(event.data);
+			// Set up MediaRecorder for audio file saving
+			this.recordedChunks = [];
+			this.chosenMime = pickMimeType();
+			const recorderOptions: MediaRecorderOptions = {};
+			if (this.chosenMime.mimeType) {
+				recorderOptions.mimeType = this.chosenMime.mimeType;
 			}
-		};
-		this.mediaRecorder.start(1000); // Collect data every second
+			this.mediaRecorder = new MediaRecorder(this.stream, recorderOptions);
+			this.mediaRecorder.ondataavailable = (event: BlobEvent) => {
+				if (event.data.size > 0) {
+					this.recordedChunks.push(event.data);
+				}
+			};
+			this.mediaRecorder.start(1000); // Collect data every second
+		} catch (e) {
+			this.cleanup();
+			throw e;
+		}
 	}
 
 	/**

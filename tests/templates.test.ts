@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
 	formatDateToken,
 	formatDuration,
-	hasTranscriptionOutputAfterEmbed,
 	renderTemplate,
 	renderTranscriptOutput,
 	sanitizeFileNameSegment,
@@ -75,21 +74,6 @@ test("renderTranscriptOutput returns only the audio embed when transcript is emp
 	});
 
 	assert.equal(output, "![[Audio/clip.webm]]");
-});
-
-test("hasTranscriptionOutputAfterEmbed matches both default and custom templates", () => {
-	assert.equal(
-		hasTranscriptionOutputAfterEmbed("\n> [!transcript]\n> hello there", "{{audio}}\n> [!transcript]\n> {{transcript}}"),
-		true
-	);
-	assert.equal(
-		hasTranscriptionOutputAfterEmbed("\n---\nkind: transcript\nhello there\n---", "---\nkind: transcript\n{{transcript}}\n---"),
-		true
-	);
-	assert.equal(
-		hasTranscriptionOutputAfterEmbed("\nhello there", "{{transcript}}"),
-		false
-	);
 });
 
 test("formatDuration and sanitizeFileNameSegment cover common golden-path values", () => {

@@ -44,14 +44,12 @@ This plugin is not yet available in the Obsidian Community Plugin directory.
 
 | Command | Description |
 |---------|-------------|
-| Start voice recording | Begin recording and transcribing at the cursor |
+| Toggle voice recording | Start or stop recording and transcribing at the cursor |
 | Start voice recording in new note | Run the configured "new note command", then start recording in the new note |
-| Stop voice recording | Stop recording and finalize transcription |
-| Toggle voice recording | Start or stop recording |
-| Transcribe audio file | Transcribe the selected audio link/embed, the audio embed under the cursor, or pick a vault audio file |
-| Transcribe audio embed at cursor | Transcribe the audio embed under the cursor without selecting it first |
-| Transcribe audio file to clipboard | Pick a vault audio file and copy transcript to clipboard (no note needed) |
+| Toggle recording to clipboard | Start or stop recording; transcript is copied to clipboard instead of inserted into a note |
+| Transcribe audio | Transcribe the selected audio link/embed, the audio embed under the cursor, or pick a vault audio file (only available when a note is open) |
 | Transcribe all audio embeds in current file | Transcribe every audio embed in the active note |
+| Transcribe audio file to clipboard | Pick a vault audio file and copy transcript to clipboard (no note needed) |
 | Download transcription models | Pre-download models without recording |
 
 ### URI Actions

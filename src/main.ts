@@ -12,7 +12,6 @@ import { parseProtocolCommand, PROTOCOL_COMMANDS } from "./core/protocol";
 import type { ProtocolCommand } from "./core/protocol";
 import {
 	formatDateToken,
-	hasTranscriptionOutputAfterEmbed,
 	renderTemplate,
 	renderTranscriptOutput,
 	sanitizeFileNameSegment,
@@ -103,8 +102,10 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.addCommand({
 			id: "toggle-recording",
 			name: "Toggle voice recording",
-			callback: () => {
-				this.toggleRecording();
+			checkCallback: (checking: boolean) => {
+				if (!this.isRecording && !this.app.workspace.getActiveViewOfType(MarkdownView)) return false;
+				if (!checking) this.toggleRecording();
+				return true;
 			},
 		});
 
@@ -127,8 +128,10 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.addCommand({
 			id: "transcribe-audio",
 			name: "Transcribe audio",
-			callback: () => {
-				this.startTranscribeAudioFile();
+			checkCallback: (checking: boolean) => {
+				if (!this.app.workspace.getActiveViewOfType(MarkdownView)) return false;
+				if (!checking) this.startTranscribeAudioFile();
+				return true;
 			},
 		});
 
@@ -493,7 +496,6 @@ export default class VoiceNotesPlugin extends Plugin {
 		}
 
 		let transcribed = 0;
-		let skipped = 0;
 		let failed = 0;
 
 		// Process in reverse order so earlier offsets remain valid after insertions
@@ -505,16 +507,10 @@ export default class VoiceNotesPlugin extends Plugin {
 			const editor = activeView.editor;
 			const currentContent = editor.getValue();
 
-			const afterEmbed = currentContent.slice(embed.position.end.offset);
-			if (this.hasTranscriptionOutputAfterEmbed(afterEmbed)) {
-				skipped++;
-				continue;
-			}
-
 			const file = this.app.metadataCache.getFirstLinkpathDest(embed.link, activeView.file!.path);
 			if (!(file instanceof TFile)) {
 				new Notice(`Voice Notes Plus: Audio file not found: ${embed.link}`);
-				skipped++;
+				failed++;
 				continue;
 			}
 
@@ -540,8 +536,6 @@ export default class VoiceNotesPlugin extends Plugin {
 					editor.replaceRange(`\n${block}`, insertPos);
 					transcribed++;
 					this.app.workspace.trigger("voice-notes-plus:transcription", transcript, activeView.file!.path);
-				} else {
-					skipped++;
 				}
 			} catch (e) {
 				failed++;
@@ -551,7 +545,6 @@ export default class VoiceNotesPlugin extends Plugin {
 
 		this.finishTranscriptionSession();
 		const parts = [`Transcribed ${transcribed} embed${transcribed !== 1 ? "s" : ""}`];
-		if (skipped > 0) parts.push(`${skipped} skipped`);
 		if (failed > 0) parts.push(`${failed} failed`);
 		new Notice(`Voice Notes Plus: ${parts.join(", ")}`);
 
@@ -974,13 +967,6 @@ export default class VoiceNotesPlugin extends Plugin {
 
 			this.registerEvent(fileOpenRef);
 		});
-	}
-
-	private hasTranscriptionOutputAfterEmbed(afterEmbed: string): boolean {
-		return hasTranscriptionOutputAfterEmbed(
-			afterEmbed,
-			this.settings.transcriptTemplate.trim() || DEFAULT_SETTINGS.transcriptTemplate
-		);
 	}
 
 	private getTemplateDateFormatter(): ((date: Date, format: string) => string | null) | undefined {

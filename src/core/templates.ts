@@ -100,35 +100,3 @@ export function renderTranscriptOutput(options: TranscriptOutputOptions): string
 	).trim();
 }
 
-export function hasTranscriptionOutputAfterEmbed(
-	afterEmbed: string,
-	template: string
-): boolean {
-	const sentinel = "__VOICE_NOTES_PLUS_SENTINEL__";
-	const rendered = renderTemplate(template, {
-		audio: "",
-		transcript: sentinel,
-		duration: "0:00",
-		noteName: "",
-		date: new Date(0),
-	}).trim();
-	const sentinelIndex = rendered.indexOf(sentinel);
-	if (sentinelIndex < 0) {
-		return false;
-	}
-
-	const prefix = rendered.slice(0, sentinelIndex).trimStart();
-	const suffix = rendered.slice(sentinelIndex + sentinel.length).trimEnd();
-	if (!prefix && !suffix) {
-		return false;
-	}
-
-	const normalized = afterEmbed.trimStart();
-	if (prefix && !normalized.startsWith(prefix)) {
-		return false;
-	}
-	if (suffix && !normalized.includes(suffix)) {
-		return false;
-	}
-	return true;
-}
