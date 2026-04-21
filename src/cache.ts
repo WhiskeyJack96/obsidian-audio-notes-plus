@@ -1,5 +1,6 @@
 import { Platform, normalizePath } from "obsidian";
 import { MODEL_IDS } from "./types";
+import { ensureDir } from "./core/fs";
 import type VoiceNotesPlugin from "./main";
 import type { LocalAssetConfig, VoiceNotesSettings } from "./types";
 
@@ -440,19 +441,7 @@ export class AssetCacheManager {
 	}
 
 	private async ensureDir(path: string): Promise<void> {
-		if (!path) return;
-
-		const adapter = this.plugin.app.vault.adapter;
-		const parts = normalizePath(path).split("/");
-		let current = "";
-
-		for (const part of parts) {
-			current = current ? `${current}/${part}` : part;
-			if (await adapter.exists(current)) {
-				continue;
-			}
-			await adapter.mkdir(current);
-		}
+		await ensureDir(this.plugin.app.vault.adapter, normalizePath(path));
 	}
 
 }

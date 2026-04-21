@@ -48,14 +48,43 @@ This plugin is not yet available in the Obsidian Community Plugin directory.
 | Start voice recording in new note | Run the configured "new note command", then start recording in the new note |
 | Stop voice recording | Stop recording and finalize transcription |
 | Toggle voice recording | Start or stop recording |
-| Transcribe audio file | Pick a vault audio file and insert transcript at cursor |
+| Transcribe audio file | Transcribe the selected audio link/embed, the audio embed under the cursor, or pick a vault audio file |
+| Transcribe audio embed at cursor | Transcribe the audio embed under the cursor without selecting it first |
 | Transcribe audio file to clipboard | Pick a vault audio file and copy transcript to clipboard (no note needed) |
 | Transcribe all audio embeds in current file | Transcribe every audio embed in the active note |
 | Download transcription models | Pre-download models without recording |
 
+### URI Actions
+
+Use `obsidian://voice-notes-plus?command=...` from Shortcuts, Raycast, Alfred, or shell scripts:
+
+- `obsidian://voice-notes-plus?command=start`
+- `obsidian://voice-notes-plus?command=start-new-note`
+- `obsidian://voice-notes-plus?command=stop`
+- `obsidian://voice-notes-plus?command=toggle`
+- `obsidian://voice-notes-plus?command=download-models`
+
+Alias URIs are also registered for direct invocation:
+
+- `obsidian://voice-notes-plus-start`
+- `obsidian://voice-notes-plus-start-new-note`
+- `obsidian://voice-notes-plus-stop`
+- `obsidian://voice-notes-plus-toggle`
+- `obsidian://voice-notes-plus-download-models`
+
 ### Plugin API
 
-After every successful transcription the plugin emits a workspace event that other plugins (QuickAdd, Templater, etc.) can subscribe to:
+Other plugins can call the plugin directly and await the transcript:
+
+```ts
+const plugin = app.plugins.plugins["voice-notes-plus"];
+const transcript = await plugin.transcribe(fileOrPcm);
+```
+
+- `fileOrPcm` can be a vault `TFile` or a `Float32Array` of 16 kHz mono PCM samples.
+- The existing workspace event still fires after successful transcriptions.
+
+After every successful transcription the plugin also emits a workspace event that other plugins (QuickAdd, Templater, etc.) can subscribe to:
 
 ```js
 app.workspace.on("voice-notes-plus:transcription", (transcript, filePath) => {
@@ -68,7 +97,8 @@ app.workspace.on("voice-notes-plus:transcription", (transcript, filePath) => {
 
 - **Model size** — Base (more accurate) or Tiny (faster, less memory)
 - **Keep models loaded** — keep models in memory between recordings
-- **Audio filename template** — template for saved recordings; supports `{{date}}` and `{{noteName}}` tokens (default: `recording-{{date}}`)
+- **Audio filename template** — template for saved recordings; supports `{{date}}`, `{{date:FORMAT}}`, and `{{noteName}}` (default: `recording-{{date}}`)
+- **Transcript template** — template for inserted output; supports `{{transcript}}`, `{{audio}}`, `{{date}}`, `{{date:FORMAT}}`, `{{duration}}`, and `{{noteName}}`
 - **Post-transcription command** — Obsidian command to run after transcription completes; the transcribed text is selected so text-transformation plugins can act on it directly
 - **New note command** — command to run before starting a recording in a new note
 

@@ -21,8 +21,8 @@ import {
 // State
 let transcriber: AutomaticSpeechRecognitionPipeline;
 let sileroVad: Awaited<ReturnType<typeof AutoModel.from_pretrained>>;
-let inferenceChain = Promise.resolve();
-let messageQueue = Promise.resolve();
+let inferenceChain: Promise<unknown> = Promise.resolve();
+let messageQueue: Promise<unknown> = Promise.resolve();
 let workerReady = false;
 let isRecording = false;
 let bufferPointer = 0;
@@ -36,8 +36,11 @@ let state = new Tensor("float32", new Float32Array(2 * 1 * 128), [2, 1, 128]);
 
 async function supportsWebGPU(): Promise<boolean> {
 	try {
-		if (!navigator.gpu) return false;
-		await navigator.gpu.requestAdapter();
+		const gpuNavigator = navigator as Navigator & {
+			gpu?: { requestAdapter: () => Promise<unknown> };
+		};
+		if (!gpuNavigator.gpu) return false;
+		await gpuNavigator.gpu.requestAdapter();
 		return true;
 	} catch {
 		return false;
@@ -155,8 +158,9 @@ async function loadModels(
 	// Disable multi-threaded WASM. The threaded path spawns a sub-Worker
 	// that imports 'worker_threads' (a Node.js module), which fails in
 	// Obsidian's blob-URL worker context. Single-threaded WASM avoids this.
+	const wasmBackend = env.backends.onnx.wasm as NonNullable<typeof env.backends.onnx.wasm>;
 	workerLog("loadModels: accessing env.backends.onnx.wasm");
-	env.backends.onnx.wasm.numThreads = 1;
+	wasmBackend.numThreads = 1;
 	workerLog("loadModels: numThreads set");
 
 	if (assetBlobs) {
@@ -165,20 +169,20 @@ async function loadModels(
 			const head = new Uint8Array(buf, 0, Math.min(8, buf.byteLength));
 			const hex = Array.from(head).map((b) => b.toString(16).padStart(2, "0")).join(" ");
 			workerLog(`  blob: ${key} (${buf.byteLength} bytes, head=${hex})`);
+			}
+			const resolved = installBlobAssets(assetBlobs);
+			env.localModelPath = resolved.modelBaseUrl;
+			wasmBackend.wasmPaths = resolved.wasmPaths;
+			workerLog(`loadModels: wasmPaths.mjs = ${resolved.wasmPaths.mjs ? "set" : "MISSING"}`);
+			workerLog(`loadModels: wasmBinary = ${resolved.wasmBinary ? `${resolved.wasmBinary.byteLength} bytes` : "MISSING"}`);
+			if (resolved.wasmBinary) {
+				wasmBackend.wasmBinary = resolved.wasmBinary;
+			}
+		} else {
+			workerLog("loadModels: desktop path");
+			env.localModelPath = modelBaseUrl;
+			wasmBackend.wasmPaths = runtimeBaseUrl;
 		}
-		const resolved = installBlobAssets(assetBlobs);
-		env.localModelPath = resolved.modelBaseUrl;
-		env.backends.onnx.wasm.wasmPaths = resolved.wasmPaths;
-		workerLog(`loadModels: wasmPaths.mjs = ${resolved.wasmPaths.mjs ? "set" : "MISSING"}`);
-		workerLog(`loadModels: wasmBinary = ${resolved.wasmBinary ? `${resolved.wasmBinary.byteLength} bytes` : "MISSING"}`);
-		if (resolved.wasmBinary) {
-			env.backends.onnx.wasm.wasmBinary = resolved.wasmBinary;
-		}
-	} else {
-		workerLog("loadModels: desktop path");
-		env.localModelPath = modelBaseUrl;
-		env.backends.onnx.wasm.wasmPaths = runtimeBaseUrl;
-	}
 
 	workerLog("loadModels: detecting device");
 	// On mobile, WebGPU may be reported as supported but using it for
@@ -189,8 +193,8 @@ async function loadModels(
 
 	// Load Silero VAD
 	// Verify the mjs blob URL is importable before handing off to ONNX Runtime.
-	if (assetBlobs && env.backends.onnx.wasm.wasmPaths) {
-		const mjsUrl = (env.backends.onnx.wasm.wasmPaths as Record<string, string>).mjs;
+	if (assetBlobs && wasmBackend.wasmPaths) {
+		const mjsUrl = (wasmBackend.wasmPaths as Record<string, string>).mjs;
 		if (mjsUrl) {
 			workerLog(`loadModels: testing mjs blob URL import`);
 			try {
@@ -202,7 +206,7 @@ async function loadModels(
 		}
 
 		// Test if WASM compilation itself works on this device.
-		const wasmBin = env.backends.onnx.wasm.wasmBinary as ArrayBuffer | undefined;
+		const wasmBin = wasmBackend.wasmBinary as ArrayBuffer | undefined;
 		if (wasmBin) {
 			workerLog(`loadModels: testing WebAssembly.compile (${wasmBin.byteLength} bytes)`);
 			try {
@@ -217,7 +221,7 @@ async function loadModels(
 
 	workerLog("loadModels: loading Silero VAD");
 	sileroVad = await AutoModel.from_pretrained("onnx-community/silero-vad", {
-		config: { model_type: "custom" },
+		config: { model_type: "custom" } as never,
 		dtype: "fp32",
 		local_files_only: true,
 	}).catch((error: Error) => {
@@ -230,12 +234,15 @@ async function loadModels(
 	// (block-wise 4-bit via MatMulNBits) because onnxruntime-web supports
 	// it on both WebGPU and WASM, the file is smaller, and the q8 variant
 	// triggers ORT 1.25's qdq optimizer bug on its embed_tokens node.
-	const dtypeConfig = { encoder_model: "fp32", decoder_model_merged: "q4" };
+	const dtypeConfig = {
+		encoder_model: "fp32",
+		decoder_model_merged: "q4",
+	} as const;
 
 	workerLog(`loadModels: loading Moonshine (${modelId})`);
 	transcriber = await pipeline("automatic-speech-recognition", modelId, {
 		device,
-		dtype: dtypeConfig as Record<string, string>,
+		dtype: dtypeConfig,
 		local_files_only: true,
 	}).catch((error: Error) => {
 		self.postMessage({ type: "error", error: `Failed to load transcription model: ${error.message}` });

@@ -42,9 +42,16 @@ export interface VoiceNotesSettings {
 
 	/**
 	 * Filename template for saved recordings.
-	 * Supported tokens: {{date}}, {{noteName}}
+	 * Supported tokens: {{date}}, {{date:FORMAT}}, {{noteName}}
 	 */
 	recordingFilenameTemplate: string;
+
+	/**
+	 * Template for inserted transcript output.
+	 * Supported tokens: {{transcript}}, {{audio}}, {{date}},
+	 * {{date:FORMAT}}, {{duration}}, {{noteName}}
+	 */
+	transcriptTemplate: string;
 }
 
 export interface LocalAssetConfig {
@@ -65,6 +72,7 @@ export const DEFAULT_SETTINGS: VoiceNotesSettings = {
 	newNoteCommandId: "",
 	keepModelsLoaded: true,
 	recordingFilenameTemplate: "recording-{{date}}",
+	transcriptTemplate: "{{audio}}\n> [!transcript]\n> {{transcript}}",
 };
 
 export interface CommandManagerLike {

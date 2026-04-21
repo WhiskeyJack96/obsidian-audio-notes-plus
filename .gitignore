@@ -22,8 +22,8 @@ Thumbs.db
 
 # TypeScript cache
 *.tsbuildinfo
+.test-dist/
 
 # Idea/planning files
 idea.md
 cache/
-

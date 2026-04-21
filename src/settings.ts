@@ -1,6 +1,4 @@
 import { AbstractInputSuggest, App, Notice, PluginSettingTab, Setting } from "obsidian";
-import { AssetCacheManager } from "./cache";
-import type { CachedFileInfo } from "./cache";
 import type VoiceNotesPlugin from "./main";
 import type { VoiceNotesSettings } from "./types";
 
@@ -89,7 +87,7 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 			.setName("Audio filename template")
 			.setDesc(
 				"Template for saved audio filenames. " +
-				"Supported tokens: {{date}} (ISO timestamp), {{noteName}} (active note basename)."
+				"Supported tokens: {{date}}, {{date:FORMAT}}, {{noteName}}."
 			)
 			.addText((text) =>
 				text
@@ -121,6 +119,22 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}
 				)
+			);
+
+		new Setting(containerEl)
+			.setName("Transcript template")
+			.setDesc(
+				"Template for inserted output. " +
+				"Supported tokens: {{transcript}}, {{audio}}, {{date}}, {{date:FORMAT}}, {{duration}}, {{noteName}}."
+			)
+			.addTextArea((text) =>
+				text
+					.setPlaceholder("{{audio}}\\n> [!transcript]\\n> {{transcript}}")
+					.setValue(this.plugin.settings.transcriptTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.transcriptTemplate = value;
+						await this.plugin.saveSettings();
+					})
 			);
 
 		new Setting(containerEl)
@@ -158,7 +172,7 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 						button.setDisabled(true);
 						button.setButtonText("Working...");
 						try {
-							const cache = new AssetCacheManager(this.plugin);
+							const cache = this.plugin.getAssetCacheManager();
 							await cache.clearCache();
 							await cache.ensureTranscriptionAssets(
 								this.plugin.settings.modelSize
@@ -188,7 +202,7 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 			cls: "voice-notes-plus-cache-loading",
 		});
 
-		const cache = new AssetCacheManager(this.plugin);
+		const cache = this.plugin.getAssetCacheManager();
 		cache.getCacheStatus(this.plugin.settings.modelSize).then((files) => {
 			container.empty();
 
@@ -228,8 +242,7 @@ export class VoiceNotesSettingTab extends PluginSettingTab {
 					recacheBtn.disabled = true;
 					recacheBtn.textContent = "Working...";
 					try {
-						const cache = new AssetCacheManager(this.plugin);
-						await cache.recacheFile(file);
+						await this.plugin.getAssetCacheManager().recacheFile(file);
 						this.plugin.transcriptionManager?.destroy();
 						this.plugin.transcriptionManager = null;
 						new Notice(`Voice Notes Plus: ${file.label} re-cached.`);
