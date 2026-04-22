@@ -13,10 +13,31 @@ export interface ProtocolParams {
 	command?: string;
 	intent?: string;
 	mode?: string;
+	file?: string;
+	template?: string;
 	[key: string]: string | undefined;
 }
 
-export function parseProtocolCommand(
+export interface ParsedProtocol {
+	command: ProtocolCommand;
+	file?: string;
+	template?: string;
+}
+
+export function parseProtocol(
+	params: ProtocolParams,
+	pluginId: string
+): ParsedProtocol | null {
+	const command = parseProtocolCommand(params, pluginId);
+	if (!command) return null;
+	return {
+		command,
+		file: params.file || undefined,
+		template: params.template || undefined,
+	};
+}
+
+function parseProtocolCommand(
 	params: ProtocolParams,
 	pluginId: string
 ): ProtocolCommand | null {

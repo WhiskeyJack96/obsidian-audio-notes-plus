@@ -5,11 +5,10 @@ import { TranscriptionManager } from "./transcription/manager";
 import { AudioRecorder } from "./recorder";
 import { DEFAULT_SETTINGS } from "./types";
 import type { CommandManagerLike, VoiceNotesSettings, WorkerStatus } from "./types";
-import type { ObsidianProtocolData } from "obsidian";
 import { formatInsertion } from "./core/insertion";
 import { extractAudioLinkFromSelection, findAudioEmbedAtCursor } from "./core/markdown";
-import { parseProtocolCommand, PROTOCOL_COMMANDS } from "./core/protocol";
-import type { ProtocolCommand } from "./core/protocol";
+import { parseProtocol, PROTOCOL_COMMANDS } from "./core/protocol";
+import type { ParsedProtocol } from "./core/protocol";
 import {
 	formatDateToken,
 	renderTemplate,
@@ -83,6 +82,7 @@ export default class VoiceNotesPlugin extends Plugin {
 	private recordingTarget: RecordingTarget | null = null;
 	private recordingStartedAt: number | null = null;
 	private clipboardRecording = false;
+	private templateOverride: string | undefined;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -187,35 +187,37 @@ export default class VoiceNotesPlugin extends Plugin {
 
 	private registerProtocolHandlers(): void {
 		this.registerObsidianProtocolHandler(this.manifest.id, (params) => {
-			void this.handleProtocolCommand(this.parseProtocolCommand(params));
+			void this.handleProtocol(parseProtocol(params, this.manifest.id));
 		});
 
 		for (const command of PROTOCOL_COMMANDS) {
-			this.registerObsidianProtocolHandler(`${this.manifest.id}-${command}`, () => {
-				void this.handleProtocolCommand(command);
+			this.registerObsidianProtocolHandler(`${this.manifest.id}-${command}`, (params) => {
+				void this.handleProtocol({ command, file: params.file || undefined, template: params.template || undefined });
 			});
 		}
 	}
 
-	private parseProtocolCommand(params: ObsidianProtocolData): ProtocolCommand | null {
-		return parseProtocolCommand(params, this.manifest.id);
-	}
-
-	private async handleProtocolCommand(command: ProtocolCommand | null): Promise<void> {
-		if (!command) {
+	private async handleProtocol(parsed: ParsedProtocol | null): Promise<void> {
+		if (!parsed) {
 			new Notice("Voice Notes Plus: Unknown URI action");
 			return;
 		}
 
-		switch (command) {
+		if (parsed.file) {
+			await this.openFileByPath(parsed.file);
+		}
+
+		const templateOverride = parsed.template || undefined;
+
+		switch (parsed.command) {
 			case "start":
 				if (this.requireIdle() && !this.isRecording) {
-					await this.startRecording();
+					await this.startRecording("inline", templateOverride);
 				}
 				return;
 			case "start-new-note":
 				if (this.requireIdle() && !this.isRecording) {
-					await this.startRecording("new-note");
+					await this.startRecording("new-note", templateOverride);
 				}
 				return;
 			case "stop":
@@ -619,7 +621,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		}
 	}
 
-	private async startRecording(mode: RecordingStartMode = "inline"): Promise<void> {
+	private async startRecording(mode: RecordingStartMode = "inline", templateOverride?: string): Promise<void> {
 		let target: RecordingTarget | null = null;
 		if (mode !== "clipboard") {
 			target = await this.resolveRecordingTarget(mode);
@@ -644,6 +646,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.recordingTarget = target;
 		this.recordingStartedAt = Date.now();
 		this.pendingTranscriptChunks = [];
+		this.templateOverride = templateOverride;
 		this.updateRecordingUi();
 		this.updateStatusBar("recording_start", this.clipboardRecording ? "Recording to clipboard..." : "Recording...");
 
@@ -704,6 +707,7 @@ export default class VoiceNotesPlugin extends Plugin {
 				this.recordingStartedAt = null;
 				this.pendingTranscriptChunks = [];
 				this.clipboardRecording = false;
+				this.templateOverride = undefined;
 				this.transcriptionManager?.clearCallbacks();
 				this.finishTranscriptionSession();
 				this.updateRecordingUi();
@@ -741,6 +745,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			this.recordingTarget = null;
 			this.recordingStartedAt = null;
 			this.pendingTranscriptChunks = [];
+			this.templateOverride = undefined;
 			this.transcriptionManager?.clearCallbacks();
 
 			this.finishTranscriptionSession();
@@ -814,7 +819,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		}
 
 		return renderTranscriptOutput({
-			template: this.settings.transcriptTemplate.trim() || DEFAULT_SETTINGS.transcriptTemplate,
+			template: this.templateOverride?.trim() || this.settings.transcriptTemplate.trim() || DEFAULT_SETTINGS.transcriptTemplate,
 			audioFilePath,
 			includeAudioEmbed,
 			transcript: trimmedTranscript,
@@ -927,6 +932,16 @@ export default class VoiceNotesPlugin extends Plugin {
 		};
 	}
 
+	private async openFileByPath(filePath: string): Promise<void> {
+		const normalized = filePath.replace(/^\/+/, "");
+		const file = this.app.vault.getAbstractFileByPath(normalized);
+		if (file instanceof TFile) {
+			await this.app.workspace.getLeaf(false).openFile(file);
+		} else {
+			new Notice(`Voice Notes Plus: File not found — ${normalized}`);
+		}
+	}
+
 	private findOpenMarkdownView(filePath: string): MarkdownView | null {
 		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
 			const view = leaf.view;
@@ -979,7 +994,12 @@ export default class VoiceNotesPlugin extends Plugin {
 
 	private executeCommand(commandId: string): boolean {
 		try {
-			return (this.app as unknown as { commands: CommandManagerLike }).commands.executeCommandById(commandId);
+			const manager = (this.app as unknown as { commands: CommandManagerLike }).commands;
+			if (!manager.commands[commandId]) {
+				new Notice(`Voice Notes Plus: Command "${commandId}" not found — is the plugin installed and enabled?`);
+				return false;
+			}
+			return manager.executeCommandById(commandId);
 		} catch {
 			return false;
 		}

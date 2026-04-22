@@ -76,6 +76,7 @@ export const DEFAULT_SETTINGS: VoiceNotesSettings = {
 };
 
 export interface CommandManagerLike {
+	commands: Record<string, unknown>;
 	executeCommandById: (id: string) => boolean;
 }
 
