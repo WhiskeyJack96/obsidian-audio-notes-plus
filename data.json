@@ -1,0 +1,8 @@
+{
+  "modelSize": "base",
+  "postTranscriptionCommandId": "",
+  "newNoteCommandId": "",
+  "keepModelsLoaded": true,
+  "recordingFilenameTemplate": "recording-{{date}}",
+  "transcriptTemplate": "{{audio}}\n> [!transcript]\n> {{transcript}}"
+}
