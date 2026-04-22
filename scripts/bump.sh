@@ -38,7 +38,7 @@ git tag "$new"
 git push origin HEAD --tags
 
 # Wait for the CI run triggered by the tag to appear
-echo "Waiting for CI run to start…"
+echo "Waiting for CI run to start..."
 run_id=""
 for i in $(seq 1 30); do
   run_id=$(gh run list --branch "$new" --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
@@ -54,6 +54,6 @@ if [[ -z "$run_id" ]]; then
   exit 1
 fi
 
-echo "Watching run $run_id…"
+echo "Watching run $run_id..."
 gh run watch "$run_id" --exit-status
 gh release view "$new" --web
