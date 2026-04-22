@@ -1,6 +1,6 @@
 {
   "name": "voice-notes-plus",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Record audio in-note and transcribe locally using Moonshine AI.",
   "main": "main.js",
   "scripts": {
@@ -8,7 +8,8 @@
     "build": "node esbuild.config.mjs production",
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/tests/**/*.test.js",
     "test:plugin": "./scripts/test-plugin.sh",
-    "test:plugin:rebuild": "./scripts/test-plugin.sh --rebuild"
+    "test:plugin:rebuild": "./scripts/test-plugin.sh --rebuild",
+    "bump": "./scripts/bump.sh"
   },
   "keywords": [
     "obsidian",
